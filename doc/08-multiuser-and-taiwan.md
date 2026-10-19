@@ -111,7 +111,7 @@ Yahoo 的 OAuth 2.0 是 **per-user** 模型：
 | Website URL or App Store Details | **GitHub repo 網址**（見下） |
 | Describe Your Intended Use Case | **見下方四行版** |
 | Expected Users | **Small (< 1,000 users)** ← 這個級距就涵蓋朋友了 |
-| Client ID | **先建 app 拿到再填**（見 [07](07-api-application.md) 的「兩個坑」） |
+| Client ID | **留空** —— 沒有 YDN 帳號的新用戶，Yahoo 核准後才配發 |
 | Notes | **留空** |
 
 ### Use Case（唯一需要用心的欄位）

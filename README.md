@@ -65,7 +65,6 @@ Design complete; implementation in progress. The design documents are in
 | [03-data-sources.md](doc/03-data-sources.md) | Data source evaluation and live test results |
 | [04-engine.md](doc/04-engine.md) | Recommendation algorithm and category win-probability model |
 | [05-system.md](doc/05-system.md) | Architecture, scheduling, notifications |
-| [06-sources.md](doc/06-sources.md) | Research sources |
 
 ---
 

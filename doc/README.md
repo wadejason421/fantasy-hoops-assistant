@@ -18,8 +18,6 @@
 | [03-data-sources.md](03-data-sources.md) | 11 個資料來源的**實測**結果（哪些今天真的能連） | 「等審核期間我能拿什麼資料？」 |
 | [04-engine.md](04-engine.md) | 推薦邏輯：swing 類別偵測、勝率模型、G-score 分母、為什麼不用 AI | 「它憑什麼說我該撿這個人？」 |
 | [05-system.md](05-system.md) | 系統架構、排程時間、推播方式、兩階段落地計畫 | 「實際怎麼做出來？」 |
-| [06-sources.md](06-sources.md) | 103 筆來源清單，每筆附查到的重點與驗證狀態 | 「這些說法哪來的？」 |
-| [07-api-application.md](07-api-application.md) | API 申請表逐欄填寫、最小版範本、兩個會害你重來的坑 | 「申請表每欄要寫啥？」 |
 | [08-multiuser-and-taiwan.md](08-multiuser-and-taiwan.md) | **朋友共用的作法、台灣被條款排除的問題、最快通過寫法** | 「朋友能用嗎？我在台灣有差嗎？」 |
 
 ## 關鍵時間（台灣時間，已換算）
