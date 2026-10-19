@@ -1,0 +1,22 @@
+# Credentials — never commit
+secrets/
+.env
+*.pem
+token.json
+oauth2.json
+
+# Cached API responses and personal league data
+data/cache/
+data/*.yaml
+data/*.json
+data/history.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
