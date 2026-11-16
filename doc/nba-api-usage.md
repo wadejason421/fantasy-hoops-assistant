@@ -345,8 +345,12 @@ TLS 指紋偽裝必須在 TLS 交握層完成，所以只有能執行原生程�
 | **`cdn.nba.com`** | ✅ **可用**（需 `curl_cffi` 偽裝指紋） | box score、play-by-play 含投籃 x/y 座標、賽程、即時比分 |
 | `stats.nba.com` | ❌ 逾時（封包在網路層被丟棄） | 進階數據（ORtg/TS%/USG%）、hustle stats |
 
-**核心資料都在 `cdn.nba.com`，所以雲端排程完全可行。** 進階數據拿不到，
-但那些可以自己從 play-by-play 算出來。
+**核心資料都在 `cdn.nba.com`，所以雲端排程完全可行。**
+
+進階數據用 `scripts/advanced_stats.py` 自己從 box score 算，實測誤差：
+**TS% / eFG% ±0.05 pp**（球員層級完全一致），ORtg / PACE / USG% 差 1~2%。
+唯一真正拿不到的是 **hustle stats**（封阻投籃、撥球、掩護助攻、卡位）——
+那是獨立的人工記錄，推導不出來。
 
 要在自己的環境複驗：`.github/workflows/probe-nba.yml` 推上 GitHub 手動 Run 一次。
 

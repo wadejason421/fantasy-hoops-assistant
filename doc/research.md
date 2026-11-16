@@ -594,6 +594,59 @@ cdn 不通 + ESPN 通  -> exit 1
 兩邊都不通          -> exit 2
 ```
 
+## 六之六、雲端拿不到的那些，到底有沒有救
+
+六之五確認 `stats.nba.com` 在雲端不可用。那進階數據和 hustle stats 怎麼辦？
+實測了三條可能的路：
+
+| 可能的來源 | 結果 |
+|---|---|
+| `cdn.nba.com` 有沒有 hustle / advanced 端點 | ❌ 猜了 6 條路徑（`liveData/hustle/`、`liveData/boxscoreadvanced/` 等）全部 403 = 不存在 |
+| `cdn.nba.com` box score 的球隊 statistics | ⚠️ **61 個欄位裡已經有** `trueShootingPercentage`、`trueShootingAttempts`、`fieldGoalsEffectiveAdjusted`、`assistsTurnoverRatio`（只有球隊層級，沒有球員層級） |
+| ESPN core API 的 statistics | ❌ 有 `VORP`、`NBARating` 但實測 `VORP=0.0`、`avgMinutes=0.0`，沒有 ORtg/DRtg/PACE/TS%/USG% |
+
+（順帶測到一個之前沒注意的：`liveData/odds/odds_todaysGames.json` 可用，115 KB，是賠率資料。）
+
+### 自己算：誤差實測
+
+把 `scripts/advanced_stats.py` 算出來的值跟 `stats.nba.com` 的官方值逐項對照
+（game 0022600244）：
+
+| 指標 | 誤差 |
+|---|---|
+| **TS%** | **±0.02 pp**（球員層級完全一致） |
+| **eFG%** | **±0.05 pp** |
+| DRtg | −0.33 |
+| ORtg | −0.33 ～ −1.77 |
+| PACE | +1.06 |
+| USG% | +0.1 ～ +1.3 pp |
+
+球員層級對照（TS% 我算 / 官方）：
+
+```
+SAC Darius Acuff Jr.    48.6 / 48.6      USG%  46.6 / 45.6
+OKC Jared McCain        41.0 / 41.0      USG%  21.8 / 21.6
+OKC Shai Gilgeous-Alex  80.2 / 80.2      USG%  32.8 / 31.5
+SAC Domantas Sabonis    63.7 / 63.7      USG%  13.9 / 13.9
+```
+
+**TS% 和 eFG% 實質上完全一致。** ORtg / PACE / USG% 有小差異，
+因為 NBA 用的回合數公式比標準估計式更細（處理球隊籃板、加罰、節末回合）。
+對「比較兩個球員誰效率高」這種用途完全夠用；要跟官方數字逐位對齊就做不到。
+
+### 最終結論
+
+| 資料 | 雲端拿得到嗎 |
+|---|---|
+| box score（33 個球員欄位、61 個球隊欄位） | ✅ 直接拿 |
+| play-by-play（含投籃 x/y 座標） | ✅ 直接拿 |
+| 賽程、即時比分、賠率 | ✅ 直接拿 |
+| TS% / eFG% | ✅ **自己算，誤差 ±0.05 pp** |
+| ORtg / DRtg / PACE / USG% | ✅ 自己算，誤差 1~2% |
+| **Hustle stats**（封阻投籃、撥球、掩護助攻、卡位、救球） | ❌ **真的拿不到**。那是獨立的人工記錄，不是從基礎數據推導的，三條路都沒有 |
+
+唯一真正失去的是 hustle stats。
+
 ## 七、對這個專案的建議
 
 分成兩種用途：
