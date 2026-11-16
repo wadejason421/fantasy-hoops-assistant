@@ -10,10 +10,16 @@
 判定方式不只看 HTTP 200 —— 每個端點都會驗證回傳內容真的有資料，
 避免「200 但內容是錯誤頁」的假陽性。
 
-結束碼：
-  0  NBA 官方可用        -> 雲端方案成行，拿得到完整資料（含投籃座標）
-  1  NBA 不可用、ESPN 可用 -> 退回 ESPN
-  2  兩者都不可用         -> 需要住宅代理或家用裝置
+兩個主機要分開看 —— 實測它們的防護不一樣：
+  cdn.nba.com   只做 TLS 指紋檢查。box score、play-by-play（含投籃 x/y 座標）、
+                 賽程、今日比分都在這裡。這是真正的核心資料。
+  stats.nba.com 指紋檢查之外，還會丟棄資料中心 IP 的封包（表現為逾時）。
+                 進階數據（ORtg/TS%/USG%）和 hustle stats 在這裡。
+
+結束碼（以 cdn 這組為準，因為那是核心資料）：
+  0  cdn 可用  -> 雲端方案成行，拿得到 box score + play-by-play + 投籃座標
+  1  cdn 不可用、ESPN 可用 -> 退回 ESPN
+  2  兩者都不可用 -> 需要住宅代理或家用裝置
 """
 
 import argparse, json, os, sys, time
@@ -111,11 +117,13 @@ def c_espn_plays(j):
 
 def build_tests(gid, espn_id, espn_date):
     rng = "&StartPeriod=0&EndPeriod=14&StartRange=0&EndRange=28800&RangeType=0"
-    nba = [
+    cdn = [
         ("cdn todaysScoreboard", f"{CDN}/liveData/scoreboard/todaysScoreboard_00.json", NBA_H, c_scoreboard, None),
         ("cdn boxscore",         f"{CDN}/liveData/boxscore/boxscore_{gid}.json",        NBA_H, c_box_live, f"boxscore_{gid}.json"),
         ("cdn playbyplay",       f"{CDN}/liveData/playbyplay/playbyplay_{gid}.json",    NBA_H, c_pbp_live, f"playbyplay_{gid}.json"),
         ("cdn scheduleLeagueV2", f"{CDN}/staticData/scheduleLeagueV2_32.json",          NBA_H, c_schedule, None),
+    ]
+    stats = [
         ("stats boxscoretradv3", f"{STATS}/boxscoretraditionalv3?GameID={gid}{rng}",    STATS_H, c_box_v3, None),
         ("stats boxscoreadvv3",  f"{STATS}/boxscoreadvancedv3?GameID={gid}{rng}",       STATS_H, c_adv_v3, None),
         ("stats playbyplayv3",   f"{STATS}/playbyplayv3?GameID={gid}&StartPeriod=0&EndPeriod=14", STATS_H, c_pbp_v3, None),
@@ -127,7 +135,7 @@ def build_tests(gid, espn_id, espn_date):
         ("espn plays",      f"{ESPN_CORE}/events/{espn_id}/competitions/{espn_id}/plays?limit=1000",
                             ESPN_H, c_espn_plays, None),
     ]
-    return nba, espn
+    return cdn, stats, espn
 
 
 def run(tests, impersonate, save=False):
@@ -205,7 +213,7 @@ def main():
     ap.add_argument("--espn-date", default="20261115", help="ESPN scoreboard 日期 yyyymmdd")
     a = ap.parse_args()
 
-    nba, espn = build_tests(a.game_id, a.espn_id, a.espn_date)
+    cdn_t, stats_t, espn_t = build_tests(a.game_id, a.espn_id, a.espn_date)
 
     print("=" * 78)
     print("NBA 雲端可行性探針")
@@ -216,26 +224,37 @@ def main():
     print()
 
     # 對照組先跑：用全新 session，確保它沒有任何來自偽裝請求的 cookie
-    print("--- 1. 對照組：NBA 官方，不偽裝指紋（預期全部失敗）---")
-    ctrl_rows = run(nba[:4], None)
+    print("--- 1. 對照組：cdn.nba.com，不偽裝指紋（預期全部失敗）---")
+    ctrl_rows = run(cdn_t, None)
     print(table(ctrl_rows)); print()
 
-    print("--- 2. NBA 官方，impersonate=chrome（這是我們真正想知道的）---")
-    nba_rows = run(nba, "chrome", save=True)
-    print(table(nba_rows)); print()
+    print("--- 2. cdn.nba.com，impersonate=chrome（核心資料：box score + play-by-play）---")
+    cdn_rows = run(cdn_t, "chrome", save=True)
+    print(table(cdn_rows)); print()
 
-    print("--- 3. ESPN（備援方案，不需要偽裝）---")
-    espn_rows = run(espn, None)
+    print("--- 3. stats.nba.com，impersonate=chrome（進階數據 / hustle，非必要）---")
+    stats_rows = run(stats_t, "chrome")
+    print(table(stats_rows)); print()
+
+    print("--- 4. ESPN（備援方案，不需要偽裝）---")
+    espn_rows = run(espn_t, None)
     print(table(espn_rows)); print()
 
-    nba_ok = all(ok for _, ok, _ in nba_rows)
+    cdn_ok = all(ok for _, ok, _ in cdn_rows)
+    stats_ok = all(ok for _, ok, _ in stats_rows)
     ctrl_blocked = not any(ok for _, ok, _ in ctrl_rows)
     espn_ok = all(ok for _, ok, _ in espn_rows)
+    nba_rows = cdn_rows + stats_rows
 
-    if nba_ok:
-        code, verdict = 0, "NBA 官方在這個 IP 可用 —— 雲端方案成行"
-        action = ("直接用 GitHub Actions 排程抓官方資料（含投籃 x/y 座標、hustle stats），"
-                  "寫進 Google Sheets 或 commit 進 repo。")
+    if cdn_ok and stats_ok:
+        code, verdict = 0, "NBA 官方全部可用 —— 雲端方案成行"
+        action = ("直接用 GitHub Actions 排程抓官方資料（box score、play-by-play 含投籃座標、"
+                  "進階數據、hustle stats），寫進 Google Sheets 或 commit 進 repo。")
+    elif cdn_ok:
+        code, verdict = 0, "核心資料可用（cdn.nba.com），進階數據不可用（stats.nba.com）"
+        action = ("雲端方案成行：box score、play-by-play（含投籃 x/y 座標）、賽程、即時比分都拿得到。"
+                  "進階數據（ORtg/TS%/USG%）和 hustle stats 要另外想辦法 —— "
+                  "住宅代理，或接受沒有。")
     elif espn_ok:
         code, verdict = 1, "NBA 官方在這個 IP 不可用，但 ESPN 可用"
         action = ("退回 ESPN：用 scripts/appscript_espn_to_sheets.gs（純 Apps Script，免費），"
@@ -245,9 +264,12 @@ def main():
         action = "需要住宅代理，或把抓取放在家用裝置（Raspberry Pi / 常開的電腦）。"
 
     note = ""
-    if nba_ok and not ctrl_blocked:
+    if cdn_ok and not ctrl_blocked:
         note = ("⚠️ 對照組也通過了 —— 代表 NBA 目前沒在擋任何客戶端，"
                 "這次的成功不能歸因於 curl_cffi。日後若又失敗，先重跑這支確認。")
+    if cdn_ok and not stats_ok:
+        note += ("\nℹ️ cdn 通、stats 逾時，是已知的差異：stats.nba.com 除了指紋檢查，"
+                 "還會丟棄資料中心 IP 的封包；cdn.nba.com 只檢查指紋。")
 
     print("=" * 78)
     print(f"結論：{verdict}")
@@ -266,12 +288,14 @@ def main():
                 f.write(f"> {note}\n\n")
             f.write(f"- 出口 IP：`{ip}`\n")
             f.write(f"- 測試比賽：`{a.game_id}` (NBA) / `{a.espn_id}` (ESPN)\n")
-            f.write(f"- 判定：NBA 官方 **{'可用' if nba_ok else '不可用'}** ／ "
+            f.write(f"- 判定：cdn.nba.com **{'可用' if cdn_ok else '不可用'}** ／ "
+                    f"stats.nba.com **{'可用' if stats_ok else '不可用'}** ／ "
                     f"對照組 **{'被擋（符合預期）' if ctrl_blocked else '未被擋'}** ／ "
                     f"ESPN **{'可用' if espn_ok else '不可用'}**\n\n")
             f.write("## 1. 對照組（不偽裝指紋，預期失敗）\n\n" + md_table(ctrl_rows) + "\n\n")
-            f.write("## 2. NBA 官方（impersonate=chrome）\n\n" + md_table(nba_rows) + "\n\n")
-            f.write("## 3. ESPN\n\n" + md_table(espn_rows) + "\n")
+            f.write("## 2. cdn.nba.com — 核心資料（impersonate=chrome）\n\n" + md_table(cdn_rows) + "\n\n")
+            f.write("## 3. stats.nba.com — 進階數據（impersonate=chrome）\n\n" + md_table(stats_rows) + "\n\n")
+            f.write("## 4. ESPN\n\n" + md_table(espn_rows) + "\n")
 
     return code
 

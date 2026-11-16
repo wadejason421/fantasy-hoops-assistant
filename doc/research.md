@@ -168,7 +168,7 @@ Golden 1 Center, Sacramento ｜ 觀眾 13,021 ｜ 132 分鐘
 
 ---
 
-## 五、封鎖的真相：是 client 指紋，不是 IP
+## 五、封鎖的真相：兩個主機兩種防護
 
 同一台 Mac、同一個網路、同一個 URL：
 
@@ -178,9 +178,13 @@ Golden 1 Center, Sacramento ｜ 觀眾 13,021 ｜ 132 分鐘
 | `curl` + 完整瀏覽器 UA | UA / Referer / Origin 都給 | ❌ **403** Akamai Access Denied |
 | Python `urllib` + `nba_api` 的完整 header 組 | UA / Referer / Origin / `x-nba-stats-origin` / `x-nba-stats-token` / Sec-Fetch-* 全給 | ❌ **403**；`stats.nba.com` 連 **TLS 握手就逾時** |
 
-03 的推測是「IP 被列入黑名單」。這次測出來不是 —— **瀏覽器從同一個 IP 打得通**。
-真正擋的是 TLS 指紋（JA3/JA4）和 TCP 層特徵，Akamai Bot Manager 認得出 curl 和 Python 的 OpenSSL 握手。
+03 的推測是「IP 被列入黑名單」。從住宅 IP 測出來不是 —— **瀏覽器從同一個 IP 打得通**。
+真正擋的是 TLS 指紋（JA3/JA4），Akamai Bot Manager 認得出 curl 和 Python 的 OpenSSL 握手。
 補 header 沒用，因為問題不在 header。
+
+> **後續修正（見六之五）**：這個結論對 `cdn.nba.com` 完全成立，但對 `stats.nba.com` 只對一半。
+> 雲端實測顯示 `stats.nba.com` 在指紋檢查之外，**還會丟棄資料中心 IP 的封包**。
+> 住宅 IP 測不出這一層，因為住宅 IP 本來就不在它的丟棄名單上。
 
 `stats.nba.com` 在 Python 連 TLS 握手都逾時，比 403 更徹底 —— 那層直接丟包。
 
@@ -533,6 +537,61 @@ impersonate=chrome 也 403/逾時 -> 資料中心 IP 確實被封
 偽裝組（chrome）  NBA 官方八個端點全部 PASS
 ESPN             三個端點全部 PASS
 exit 0
+```
+
+## 六之五、雲端實測結果（2026-11-16，GitHub Actions）
+
+### 結論：核心資料在雲端可用，進階數據不可用
+
+GitHub Actions runner，出口 IP `20.12.246.122`（Des Moines, US, AS8075 Microsoft）：
+
+| 組 | 結果 |
+|---|---|
+| 對照組（不偽裝指紋） | cdn 四個端點全部 **403** —— 與住宅 IP 一致 |
+| **`cdn.nba.com`**（`impersonate="chrome"`） | **四個端點全部 PASS** ✅ |
+| `stats.nba.com`（`impersonate="chrome"`） | 四個端點全部 **逾時 30 秒** ❌ |
+| ESPN | 三個端點全部 PASS ✅ |
+
+所以答案不是非黑即白 —— **兩個主機的防護機制不一樣**：
+
+| 主機 | 防護 | 資料中心 IP 能用嗎 | 裡面有什麼 |
+|---|---|---|---|
+| `cdn.nba.com` | 只檢查 TLS 指紋 | **可以**（要 `curl_cffi`） | box score、play-by-play（含投籃 x/y 座標）、賽程、今日即時比分 |
+| `stats.nba.com` | 指紋檢查 **+ 丟棄資料中心 IP** | **不行** | 進階數據（ORtg/DRtg/TS%/USG%/PACE）、hustle stats |
+
+`stats.nba.com` 的失敗是**逾時**不是 403 —— 封包在網路層就被丟掉，連 TLS 交握都沒完成。
+這跟住宅 IP 上「不偽裝指紋時 `stats.nba.com` 也逾時」是同一種現象，
+代表它的過濾比 `cdn.nba.com` 更早、更粗暴。
+
+### 對日常使用的意義
+
+**需要的東西都拿得到。** box score 和 play-by-play（含投籃座標）都在 `cdn.nba.com`，
+雲端排程完全可行。拿不到的是進階數據和 hustle stats —— 而那些**可以自己從
+play-by-play 算**（ORtg、TS%、USG% 都是從基礎數據推導的）。
+
+### 我先前的一個誤判
+
+六之三提到有一則 Hacker News 留言聲稱「`stats.nba.com` 用 TLS 指紋並丟棄資料中心 IP，
+而 `cdn.nba.com` 的 live 端點不受保護、任何地方都能打」，我當時以住宅 IP 的實測
+（cdn 也 403）判定它不符。
+
+**那則留言對了一半，而且對的那一半是我當時測不到的那一半**：
+`stats.nba.com` 確實會丟棄資料中心 IP。它錯的是「`cdn.nba.com` 不受保護」——
+cdn 確實有指紋檢查（不偽裝就 403）。
+
+教訓：住宅 IP 的實測無法否證「資料中心 IP 被封」這類命題，因為那個變數根本沒被測到。
+我當時說「以實測為準」，但實測的範圍不涵蓋那個主張。
+
+### 探針的判定已改成分層
+
+`cloud_probe.py` 原本要求八個端點全過才給 exit 0，會把「核心可用、進階不可用」
+誤報成失敗。現在改成以 `cdn.nba.com` 那組為準：
+
+```
+cdn 通 + stats 通  -> exit 0「NBA 官方全部可用」
+cdn 通 + stats 不通 -> exit 0「核心資料可用，進階數據不可用」  ← 雲端的實際情況
+cdn 不通 + ESPN 通  -> exit 1
+兩邊都不通          -> exit 2
 ```
 
 ## 七、對這個專案的建議

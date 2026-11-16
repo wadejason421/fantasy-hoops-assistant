@@ -338,8 +338,17 @@ TLS 指紋偽裝必須在 TLS 交握層完成，所以只有能執行原生程�
 
 照這個模式，任何支援 Python 的排程環境都能用，不限 GitHub Actions。
 
-資料中心 IP 是否會被另外封鎖還沒驗證過 ——
-`.github/workflows/probe-nba.yml` 推上 GitHub 手動 Run 一次就有答案（免費，5 分鐘）。
+### 兩個主機在雲端的差別（2026-11-16 於 GitHub Actions 實測）
+
+| 主機 | 資料中心 IP | 裡面有什麼 |
+|---|---|---|
+| **`cdn.nba.com`** | ✅ **可用**（需 `curl_cffi` 偽裝指紋） | box score、play-by-play 含投籃 x/y 座標、賽程、即時比分 |
+| `stats.nba.com` | ❌ 逾時（封包在網路層被丟棄） | 進階數據（ORtg/TS%/USG%）、hustle stats |
+
+**核心資料都在 `cdn.nba.com`，所以雲端排程完全可行。** 進階數據拿不到，
+但那些可以自己從 play-by-play 算出來。
+
+要在自己的環境複驗：`.github/workflows/probe-nba.yml` 推上 GitHub 手動 Run 一次。
 
 **只用 Google Apps Script 的話**：`UrlFetchApp` 碰不到 TLS 層，所以走 ESPN 的介面。
 `scripts/appscript_espn_to_sheets.gs` 是完整可用的版本（ESPN → Google Sheets、
