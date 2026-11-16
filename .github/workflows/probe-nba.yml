@@ -1,0 +1,72 @@
+# 回答一個問題：資料中心 IP 能不能抓 NBA 官方資料？
+#
+# 本機（住宅 IP）已確認 NBA 擋的是 TLS 指紋 —— curl_cffi 偽裝 Chrome 就全部 200，
+# 不偽裝全部 403。但「資料中心 IP 是否另外被封」沒人驗證過：網路上那些
+# 「部署到雲端就掛」的報告全部用普通 requests 跑，而普通 requests 從住宅 IP
+# 也一樣失敗，所以它們無法區分「IP 被封」和「指紋被擋」。
+#
+# GitHub 的 runner 跑在 Azure 上，是標準資料中心 IP。這支 workflow 就是來分開這兩件事的。
+#
+# 怎麼看結果：
+#   綠勾 ✅ -> NBA 官方在雲端可用，方案成行
+#   紅叉 ❌ -> 點進去看 Summary，它會寫清楚是「只剩 ESPN」還是「兩邊都不通」
+#
+# Summary 頁會有完整表格，不需要翻 log。
+
+name: probe-nba
+
+on:
+  workflow_dispatch:        # 手動觸發：Actions 頁 -> probe-nba -> Run workflow
+    inputs:
+      game_id:
+        description: 'NBA 官方 game id（已結束的比賽）'
+        required: false
+        default: '0022600244'
+      espn_id:
+        description: '同一場比賽的 ESPN event id'
+        required: false
+        default: '401909993'
+      espn_date:
+        description: 'ESPN scoreboard 日期 yyyymmdd'
+        required: false
+        default: '20261115'
+
+  schedule:
+    # 每天 UTC 14:17 跑一次，累積不同時段的結果（排程時間 GitHub 可能延遲數分鐘）
+    - cron: '17 14 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 取出 repo
+        uses: actions/checkout@v4
+
+      - name: 裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 裝 curl_cffi
+        run: pip install --quiet --disable-pip-version-check curl_cffi
+
+      - name: 跑探針
+        run: |
+          python scripts/cloud_probe.py \
+            --game-id   "${{ github.event.inputs.game_id   || '0022600244' }}" \
+            --espn-id   "${{ github.event.inputs.espn_id   || '401909993' }}" \
+            --espn-date "${{ github.event.inputs.espn_date || '20261115' }}"
+
+      - name: 上傳抓到的原始 JSON（成功時才有）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-output
+          path: probe-output/
+          if-no-files-found: ignore
+          retention-days: 14

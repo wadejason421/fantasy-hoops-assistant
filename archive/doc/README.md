@@ -1,4 +1,8 @@
-# NBA Fantasy 每日決策系統 — 設計文件
+# NBA Fantasy 每日決策系統 — 設計文件（已歸檔）
+
+> **這些文件已歸檔。** 目前在維護的只有 [doc/research.md](../../doc/research.md)
+> 和 [doc/nba-api-usage.md](../../doc/nba-api-usage.md)。
+> 以下是 2026-10 的 Yahoo Fantasy 設計研究，保留作為紀錄。
 
 目標：每天在台灣時間開賽前，自動推播「今天該排誰、該撿誰、為什麼」，決策依據是**本週對手的類別戰況**，而不是球員的絕對強弱。
 
@@ -19,6 +23,7 @@
 | [04-engine.md](04-engine.md) | 推薦邏輯：swing 類別偵測、勝率模型、G-score 分母、為什麼不用 AI | 「它憑什麼說我該撿這個人？」 |
 | [05-system.md](05-system.md) | 系統架構、排程時間、推播方式、兩階段落地計畫 | 「實際怎麼做出來？」 |
 | [06-reference-repos.md](06-reference-repos.md) | 開發時要參考的五個開源專案，各自要拿什麼 | 「程式怎麼寫？抄誰？」 |
+| [doc/research.md](../../doc/research.md) | NBA 官方即時 API 研究（**已移出 archive，是目前唯一在維護的文件**） | 「即時比賽數據要去哪抓？」 |
 
 ## 關鍵時間（台灣時間，已換算）
 

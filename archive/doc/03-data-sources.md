@@ -20,6 +20,14 @@
 
 ## 二、結論：用 ESPN，不要用 NBA.com
 
+> **2026-11-16 補充（見 [doc/research.md](../../doc/research.md)）**：
+> 下面「NBA 把雲端 IP 列入黑名單」的推測**不正確**。重測後確認：同一台機器、同一個 IP，
+> 用真實瀏覽器從 `nba.com` 頁面 `fetch()` 可以拿到完整資料（200），只有 `curl` 和 Python
+> 吃 403。擋的是 **TLS 指紋**，不是 IP，所以補 header 和換 VPN 都沒用。
+> **已實測 `curl_cffi` + `impersonate="chrome"` 可以完全繞過**（8 個端點全 200），
+> 而且 `nba_api` 透過 `set_session()` 就能直接沿用。「主線用 ESPN」這個結論不變
+> —— 但即時 box score / play-by-play 現在官方那條路是通的。
+
 `cdn.nba.com` 回 403、`stats.nba.com` 直接逾時。這跟 `nba_api` 的已知問題一致 —— NBA 把一批 IP（特別是雲端供應商的 AWS/Heroku 網段）列入黑名單，症狀就是「本機跑得動、部署到雲端就掛住」。而這裡連本機都不通。
 
 `nba_api` 自己也承認 "NBA 官網的資料介面大多沒有文件，而且經常變動"，且 "makes no guarantees about uptime, breaking changes"。GitHub issue #665 就是 `cdn.nba.com` 賽程介面 Access Denied。

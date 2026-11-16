@@ -5,6 +5,9 @@ secrets/
 token.json
 oauth2.json
 
+# Probe output (generated)
+probe-output/
+
 # Cached API responses and personal league data
 data/cache/
 data/*.yaml

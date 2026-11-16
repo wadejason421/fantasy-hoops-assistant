@@ -55,17 +55,16 @@ lands in the category that is still winnable.
 
 ## Status
 
-Design complete; implementation in progress. The design documents are in
-[`doc/`](doc/) (written in Traditional Chinese):
+Current work is the NBA official API investigation. Those are the only
+documents under [`doc/`](doc/) (written in Traditional Chinese):
 
 | Document | Contents |
 |---|---|
-| [01-yahoo-api.md](doc/01-yahoo-api.md) | Yahoo API access, endpoints, OAuth |
-| [02-builtin.md](doc/02-builtin.md) | What Yahoo's built-in tools do and don't cover |
-| [03-data-sources.md](doc/03-data-sources.md) | Data source evaluation and live test results |
-| [04-engine.md](doc/04-engine.md) | Recommendation algorithm and category win-probability model |
-| [05-system.md](doc/05-system.md) | Architecture, scheduling, notifications |
-| [06-reference-repos.md](doc/06-reference-repos.md) | Open-source projects referenced during development |
+| [nba-api-usage.md](doc/nba-api-usage.md) | How to call the NBA API: endpoints, fields, formats, limits |
+| [research.md](doc/research.md) | Full investigation log — what was tested, what the blocking was, how it was solved |
+
+The earlier Yahoo Fantasy design documents are archived in
+[`archive/doc/`](archive/doc/) — see [archive/doc/README.md](archive/doc/README.md).
 
 ---
 
