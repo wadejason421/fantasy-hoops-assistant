@@ -35,6 +35,24 @@ data/
 
 一季（約 170 個比賽日）合計約 100 MB。
 
+## 怎麼知道有沒有更新
+
+由快到慢：
+
+| 方法 | 怎麼做 |
+|---|---|
+| **看最後一筆資料** | 開 [index.csv](index.csv)，捲到最後一列看日期 |
+| **看 commit 紀錄** | repo 首頁的 commit 列表，`data: NBA box score...` 就是自動抓的那筆 |
+| **看 Actions** | Actions 分頁 → `fetch-nba`，綠勾代表成功，點進去的 Summary 有抓了幾場 |
+| **手機** | 裝 GitHub App，Watch 這個 repo |
+| **本機一行指令** | `git pull -q && tail -3 data/index.csv` |
+
+**失敗會自動寄信。** 排程的 workflow 失敗時 GitHub 會寄 email 給你，所以
+「沒收到信」通常就代表正常。不用每天主動檢查。
+
+> 另一個要留意的：repo 連續 60 天沒有任何活動，GitHub 會**自動停用排程 workflow**
+> 並寄信通知。這個 workflow 每天都會 commit，所以只要它在跑就不會觸發這條規則。
+
 ## 怎麼用
 
 ```bash

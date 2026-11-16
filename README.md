@@ -62,9 +62,13 @@ documents under [`doc/`](doc/) (written in Traditional Chinese):
 |---|---|
 | [nba-api-usage.md](doc/nba-api-usage.md) | How to call the NBA API: endpoints, fields, formats, limits |
 | [research.md](doc/research.md) | Full investigation log — what was tested, what the blocking was, how it was solved |
+| [app-design.md](doc/app-design.md) | Feasibility and UI design for a live box score / play-by-play app |
 
 The earlier Yahoo Fantasy design documents are archived in
 [`archive/doc/`](archive/doc/) — see [archive/doc/README.md](archive/doc/README.md).
+
+Fetched data lands in [`data/`](data/), written daily by
+[`fetch-nba.yml`](.github/workflows/fetch-nba.yml) — see [data/README.md](data/README.md).
 
 ---
 
