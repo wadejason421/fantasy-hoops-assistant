@@ -1,0 +1,96 @@
+# 每天自動抓前一晚所有比賽的 box score + play-by-play，commit 進這個 repo。
+#
+# 資料來源是 cdn.nba.com —— 雲端實測可用的那個主機（三次不同 Azure IP 都通）。
+# stats.nba.com 在雲端被丟包，所以進階數據由 scripts/advanced_stats.py 自己算。
+#
+# 產出（都在 data/ 底下）：
+#   data/index.csv                          一場比賽一列，GitHub 網頁可直接看
+#   data/tables/<date>/box_score.csv        一名球員一列，網頁可直接看
+#   data/tables/<date>/advanced.csv         自己算的進階數據，網頁可直接看
+#   data/tables/<date>/play_by_play.csv.gz  一個動作一列（含投籃座標）
+#   data/raw/<date>/*.json.gz               原始回應，真相來源
+#
+# ⚠️ 需要 repo 設定 Settings -> Actions -> General -> Workflow permissions
+#    設為「Read and write permissions」，否則推不回去。
+
+name: fetch-nba
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '美東日期 YYYY-MM-DD（留空＝最近一輪比賽）'
+        required: false
+        default: ''
+      force:
+        description: '已抓過的也重抓'
+        type: boolean
+        default: false
+
+  schedule:
+    # 每天 UTC 08:23 = 美東 03:23 = 台北 16:23
+    # 最晚的西岸比賽約美東 01:30 結束，所以這個時間所有比賽都已完結
+    - cron: '23 8 * * *'
+
+permissions:
+  contents: write          # 要 commit 回 repo
+
+concurrency:
+  group: fetch-nba         # 不要兩個同時跑去推同一個分支
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 取出 repo
+        uses: actions/checkout@v4
+
+      - name: 裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 裝 curl_cffi
+        run: pip install --quiet --disable-pip-version-check curl_cffi
+
+      - name: 抓資料
+        run: |
+          python scripts/fetch_games.py \
+            ${{ github.event.inputs.date && format('--date {0}', github.event.inputs.date) || '' }} \
+            ${{ github.event.inputs.force == 'true' && '--force' || '' }} \
+            | tee fetch.log
+
+      - name: 寫進 Actions Summary
+        if: always()
+        run: |
+          {
+            echo '# NBA 每日抓取'
+            echo
+            echo '```'
+            cat fetch.log 2>/dev/null || echo '(沒有輸出)'
+            echo '```'
+            if [ -f data/index.csv ]; then
+              echo
+              echo "累積比賽數：$(( $(wc -l < data/index.csv) - 1 ))"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit 並推回
+        run: |
+          rm -f fetch.log
+          if [ -z "$(git status --porcelain data/)" ]; then
+            echo "data/ 沒有變化，不需要 commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          N=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          git commit -m "data: NBA box score and play-by-play ($N files)"
+          # 推之前先 rebase，避免跟你本機的 push 撞在一起
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "已推回 ${GITHUB_REF_NAME}"
