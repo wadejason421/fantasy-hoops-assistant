@@ -33,7 +33,7 @@ export function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin || "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, If-Modified-Since",
     "Access-Control-Max-Age": "86400",
   };
 }
@@ -42,7 +42,7 @@ export function corsHeaders(origin) {
  * 把 /static/json/... 這個路徑轉給 cdn.nba.com 並回傳結果。
  * @returns {{status:number, body:string, headers:Object}}
  */
-export async function proxyPath(path, origin) {
+export async function proxyPath(path, origin, reqHeaders) {
   if (!ALLOW.some((re) => re.test(path))) {
     return {
       status: 403,
@@ -56,16 +56,23 @@ export async function proxyPath(path, origin) {
   }
 
   const url = `https://cdn.nba.com${path}`;
+  const out = {
+    // cdn.nba.com 只認這個。沒有它一律 403。
+    "Referer": "https://www.nba.com/",
+    "Origin": "https://www.nba.com",
+    "Accept": "application/json, text/plain, */*",
+  };
+
+  // 轉送條件式請求，讓沒變動的資料回 304（0 bytes）而不是整包重傳。
+  // 實測 cdn.nba.com 支援 If-Modified-Since（If-None-Match 無效，所以不轉）。
+  // 比賽中每 10 秒輪詢一次 play-by-play，這一行把每場的流量從
+  // 約 200 MB 降到只有真正變動時才傳 —— 手機看球差很多。
+  const ims = reqHeaders && (reqHeaders["if-modified-since"] || reqHeaders["If-Modified-Since"]);
+  if (ims) out["If-Modified-Since"] = ims;
+
   let upstream;
   try {
-    upstream = await fetch(url, {
-      headers: {
-        // cdn.nba.com 只認這個。沒有它一律 403。
-        "Referer": "https://www.nba.com/",
-        "Origin": "https://www.nba.com",
-        "Accept": "application/json, text/plain, */*",
-      },
-    });
+    upstream = await fetch(url, { headers: out });
   } catch (e) {
     return {
       status: 502,
@@ -74,18 +81,23 @@ export async function proxyPath(path, origin) {
     };
   }
 
-  const body = await upstream.text();
   const secs = cacheSeconds(path);
-  return {
-    status: upstream.status,
-    body,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": `public, max-age=${secs}, s-maxage=${secs}`,
-      "X-Upstream-Status": String(upstream.status),
-      ...corsHeaders(origin),
-    },
+  const lastMod = upstream.headers.get("last-modified");
+
+  const headers = {
+    "Cache-Control": `public, max-age=${secs}, s-maxage=${secs}`,
+    "X-Upstream-Status": String(upstream.status),
+    // 要讓前端讀得到 Last-Modified，必須明確 expose（CORS 預設只給少數幾個 header）
+    "Access-Control-Expose-Headers": "Last-Modified, X-Upstream-Status",
+    ...corsHeaders(origin),
   };
+  if (lastMod) headers["Last-Modified"] = lastMod;
+
+  // 304 不能有 body
+  if (upstream.status === 304) return { status: 304, body: "", headers };
+
+  headers["Content-Type"] = "application/json; charset=utf-8";
+  return { status: upstream.status, body: await upstream.text(), headers };
 }
 
 /** GET / 回這個，方便確認部署成功與白名單內容。 */

@@ -59,6 +59,45 @@ const pbp = await (await fetch(`${BASE}/static/json/liveData/playbyplay/playbypl
 
 回傳格式跟官方完全一樣，欄位說明見 [`doc/nba-api-usage.md`](../doc/nba-api-usage.md)。
 
+## 省流量：條件式請求
+
+比賽中每 10 秒抓一次 play-by-play，一場 3 小時就是 1,080 次 × 400 KB ≈ **200 MB**。
+用手機看球這個量不能接受。
+
+所以代理會轉送 `If-Modified-Since`：資料沒變就回 **304、0 bytes**。
+實測 `cdn.nba.com` 支援這個（`If-None-Match` 無效，所以只轉 `If-Modified-Since`）。
+
+前端這樣用：
+
+```js
+let lastMod = null;
+
+async function poll(url) {
+  const headers = lastMod ? { "If-Modified-Since": lastMod } : {};
+  const r = await fetch(url, { headers });
+  if (r.status === 304) return null;           // 沒變，不用重畫
+  lastMod = r.headers.get("Last-Modified");    // 代理有 expose 這個 header
+  return r.json();
+}
+```
+
+這樣只有真正有新事件時才會傳資料，一場比賽的流量從 200 MB 降到幾 MB。
+
+## 額度夠不夠
+
+一場 3 小時的比賽、每 10 秒輪詢一次：
+
+| | 一場 | 一個月（15 個比賽夜） |
+|---|---|---|
+| 請求數 | 約 3,200 | 約 48,000 |
+| Vercel Hobby 額度 | 100 萬次/月 | **用掉 5%** |
+| Cloudflare Workers 額度 | 10 萬次/**天** | **用掉 3%** |
+
+兩邊都綽綽有餘。流量因為有 304，實際只有幾 MB。
+
+> **Vercel Hobby 是「個人非商業用途」授權。** 自己看球、自己玩 fantasy 沒問題；
+> 哪天要放廣告或收費就得升級 Pro（$20/月）。Cloudflare Workers 免費方案沒有這條限制。
+
 ## 白名單
 
 **只開放四條路徑**，其餘一律 403：

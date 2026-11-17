@@ -32,7 +32,7 @@ export default async function handler(req, res) {
   }
 
   if (path === "/__selftest") {
-    const r = await proxyPath("/static/json/liveData/scoreboard/todaysScoreboard_00.json", origin);
+    const r = await proxyPath("/static/json/liveData/scoreboard/todaysScoreboard_00.json", origin, {});
     let games = null;
     try { games = JSON.parse(r.body).scoreboard.games.length; } catch {}
     Object.entries(cors).forEach(([k, v]) => res.setHeader(k, v));
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const r = await proxyPath(path, origin);
+  const r = await proxyPath(path, origin, req.headers);
   Object.entries(r.headers).forEach(([k, v]) => res.setHeader(k, v));
-  return res.status(r.status).send(r.body);
+  return r.status === 304 ? res.status(304).end() : res.status(r.status).send(r.body);
 }

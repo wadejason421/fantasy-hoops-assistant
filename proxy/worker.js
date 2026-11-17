@@ -30,7 +30,7 @@ export default {
 
     // 自我檢測：確認這個 runtime 的指紋過不過得了 NBA
     if (url.pathname === "/__selftest") {
-      const r = await proxyPath("/static/json/liveData/scoreboard/todaysScoreboard_00.json", origin);
+      const r = await proxyPath("/static/json/liveData/scoreboard/todaysScoreboard_00.json", origin, {});
       let games = null;
       try { games = JSON.parse(r.body).scoreboard.games.length; } catch {}
       return Response.json({
@@ -44,7 +44,8 @@ export default {
       }, { headers: corsHeaders(origin) });
     }
 
-    const r = await proxyPath(url.pathname, origin);
+    const h = {}; request.headers.forEach((v, k) => (h[k.toLowerCase()] = v));
+    const r = await proxyPath(url.pathname, origin, h);
     return new Response(r.body, { status: r.status, headers: r.headers });
   },
 };
