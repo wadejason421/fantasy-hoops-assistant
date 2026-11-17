@@ -4,7 +4,7 @@
 
 | workflow | 什麼時候跑 | 抓什麼 |
 |---|---|---|
-| [`live-nba.yml`](../.github/workflows/live-nba.yml) | 比賽時段每 15 分鐘（UTC 00:00~07:59）、早場每 30 分鐘（UTC 17:00~23:59） | **進行中**的比賽，數據邊打邊更新 |
+| [`live-nba.yml`](../.github/workflows/live-nba.yml) | 比賽時段每 15 分鐘（UTC 23:00~07:59）、早場每 30 分鐘（UTC 17:00~22:59） | **進行中**的比賽，數據邊打邊更新 |
 | [`fetch-nba.yml`](../.github/workflows/fetch-nba.yml) | 每天 UTC 08:23（台北 16:23）一次 | 收尾。那時全部 Final，補齊原始 JSON 與壓縮檔 |
 
 沒有比賽在打的那幾輪不會產生 commit。
