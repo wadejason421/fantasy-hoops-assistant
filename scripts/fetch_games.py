@@ -12,13 +12,26 @@
   data/raw/<date>/boxscore_<id>.json.gz  原始回應，真相來源，不要改
   data/raw/<date>/playbyplay_<id>.json.gz
 
-重複執行安全：已經抓過的比賽會跳過（看 raw 檔在不在）。
+重複執行安全：已經抓過的「已結束」比賽會跳過（看 raw 檔在不在）。
+進行中的比賽永遠重抓 —— 它的數字還在變，快取沒有意義。
 
 用法：
   python scripts/fetch_games.py                 # 最近一個有已結束比賽的日期
   python scripts/fetch_games.py --date 2026-11-15
   python scripts/fetch_games.py --days-ago 1    # 美東的昨天
   python scripts/fetch_games.py --force         # 已抓過的也重抓
+  python scripts/fetch_games.py --live          # 即時模式，見下
+
+即時模式（--live）：
+  把**進行中**的比賽也抓進來，給比賽時段每 N 分鐘跑一次的排程用。
+  跟平常那一輪的差別只有三點：
+
+  1. 進行中的場次每輪都重抓（快取只對已結束的場次生效）
+  2. 進行中的場次**不寫** data/raw/ —— 那是「真相來源」，半場的快照不是真相。
+     等它打完，之後任一輪看到 Final 就會把原始檔補上
+  3. 該日還有比賽沒打完時，play-by-play 寫成未壓縮的 play_by_play.csv。
+     因為這個檔每輪都重寫，而 git 對純文字能做 delta、對 .gz 不能。
+     全部打完後的那一輪會寫出 play_by_play.csv.gz 並刪掉未壓縮的那個
 """
 
 import argparse, csv, gzip, json, os, re, sys, time
@@ -94,6 +107,21 @@ def write_csv_gz(path, cols, rows):
         w.writerows(rows)
 
 
+_SB = {}
+
+
+def scoreboard(session):
+    """todaysScoreboard，一次執行只抓一次。
+
+    這支是 liveData，比賽進行中的 gameStatus / gameStatusText 會即時變動
+    （約 10~20 秒延遲）。判斷「現在打到哪」只能靠它。
+    """
+    if "v" not in _SB:
+        _SB["v"] = get(
+            session, f"{CDN}/liveData/scoreboard/todaysScoreboard_00.json").json()["scoreboard"]
+    return _SB["v"]
+
+
 def pick_date(session, args):
     """決定要抓哪一天（美東日期，YYYY-MM-DD）。"""
     if args.date:
@@ -101,12 +129,20 @@ def pick_date(session, args):
     if args.days_ago is not None:
         return (datetime.now(ET) - timedelta(days=args.days_ago)).strftime("%Y-%m-%d")
     # 預設：用 todaysScoreboard 的 gameDate（它指向最近一輪比賽，不是本地午夜換日）
-    sb = get(session, f"{CDN}/liveData/scoreboard/todaysScoreboard_00.json").json()["scoreboard"]
-    return sb["gameDate"]
+    return scoreboard(session)["gameDate"]
 
 
 def games_on(session, date_str):
-    """回傳該日所有比賽 [(gameId, away, home, statusInt, statusText)]。"""
+    """回傳該日所有比賽 [(gameId, away, home, statusInt, statusText)]。
+
+    目標日就是 todaysScoreboard 指向的那一輪時用 scoreboard —— 狀態是即時的。
+    其他日期才去翻 staticData 的完整賽程；staticData 有 CDN 快取，
+    進行中的狀態不可靠，所以不拿它判斷即時狀態（順便省下幾 MB 的下載）。
+    """
+    sb = scoreboard(session)
+    if sb.get("gameDate") == date_str:
+        return [(g["gameId"], g["awayTeam"]["teamTricode"], g["homeTeam"]["teamTricode"],
+                 g["gameStatus"], g["gameStatusText"]) for g in sb["games"]]
     want = datetime.strptime(date_str, "%Y-%m-%d").strftime("%m/%d/%Y")
     sch = get(session, f"{CDN}/staticData/scheduleLeagueV2_32.json").json()
     for d in sch["leagueSchedule"]["gameDates"]:
@@ -122,6 +158,8 @@ def main():
     ap.add_argument("--days-ago", type=int, help="美東的 N 天前")
     ap.add_argument("--out", default="data", help="輸出根目錄（預設 data）")
     ap.add_argument("--force", action="store_true", help="已抓過的也重抓")
+    ap.add_argument("--live", action="store_true",
+                    help="即時模式：進行中的比賽也抓，每輪重抓未結束的場次")
     a = ap.parse_args()
 
     S = cffi.Session(impersonate="chrome")
@@ -132,26 +170,31 @@ def main():
     if not sched:
         print("這一天沒有比賽，結束。")
         return 0
-    final = [g for g in sched if g[3] == 3]
-    print(f"賽程 {len(sched)} 場，其中已結束 {len(final)} 場")
+    # gameStatus: 1=未開始 2=進行中 3=已結束
+    wanted = {2, 3} if a.live else {3}
+    label = "已結束或進行中" if a.live else "已結束"
+    targets = [g for g in sched if g[3] in wanted]
+    print(f"賽程 {len(sched)} 場，其中{label} {len(targets)} 場")
     for gid, aw, hm, st, txt in sched:
-        if st != 3:
+        if st not in wanted:
             print(f"  跳過 {gid} {aw}@{hm} — {txt}")
-    if not final:
-        print("沒有已結束的比賽，結束。")
+    if not targets:
+        print(f"沒有{label}的比賽，結束。")
         return 0
 
     raw_dir = os.path.join(a.out, "raw", date_str)
     tbl_dir = os.path.join(a.out, "tables", date_str)
 
     box_rows, adv_rows, pbp_rows, index_rows = [], [], [], []
-    fetched = skipped = 0
+    fetched = skipped = live_n = 0
 
-    for gid, aw, hm, _, _ in final:
+    for gid, aw, hm, st, txt in targets:
+        is_final = st == 3
         bpath = os.path.join(raw_dir, f"boxscore_{gid}.json.gz")
         ppath = os.path.join(raw_dir, f"playbyplay_{gid}.json.gz")
 
-        if os.path.exists(bpath) and os.path.exists(ppath) and not a.force:
+        # 快取只對已結束的場次生效。進行中的數字還在變，沿用舊檔等於拿舊數據。
+        if is_final and os.path.exists(bpath) and os.path.exists(ppath) and not a.force:
             with gzip.open(bpath, "rb") as f:
                 box = json.load(f)
             with gzip.open(ppath, "rb") as f:
@@ -160,8 +203,14 @@ def main():
         else:
             rb = get(S, f"{CDN}/liveData/boxscore/boxscore_{gid}.json")
             rp = get(S, f"{CDN}/liveData/playbyplay/playbyplay_{gid}.json")
-            write_gz(bpath, rb.content)
-            write_gz(ppath, rp.content)
+            # 只有打完的才寫 raw/ —— 那裡是真相來源，半場的快照不是真相。
+            # 等這場打完，之後任一輪看到 Final 就會補上。
+            if is_final:
+                write_gz(bpath, rb.content)
+                write_gz(ppath, rp.content)
+            else:
+                live_n += 1
+                print(f"  即時 {gid} {aw}@{hm} — {txt}")
             box, pbp = rb.json(), rp.json()
             fetched += 1
             time.sleep(0.5)
@@ -220,7 +269,23 @@ def main():
 
     write_csv(os.path.join(tbl_dir, "box_score.csv"), box_cols, box_rows)
     write_csv(os.path.join(tbl_dir, "advanced.csv"), adv_cols, adv_rows)
-    write_csv_gz(os.path.join(tbl_dir, "play_by_play.csv.gz"), PBP_COLS, pbp_rows)
+
+    # play-by-play：這個檔在即時模式下每輪都會重寫。git 對純文字能做 delta，
+    # 對 .gz 不能（改一個 byte 就是一顆全新的 blob），所以還有比賽沒打完時寫純文字，
+    # 全部打完的那一輪才壓成 .csv.gz 並刪掉純文字版。
+    all_final = all(g[3] == 3 for g in targets)
+    pbp_gz = os.path.join(tbl_dir, "play_by_play.csv.gz")
+    pbp_plain = os.path.join(tbl_dir, "play_by_play.csv")
+    if all_final:
+        write_csv_gz(pbp_gz, PBP_COLS, pbp_rows)
+        if os.path.exists(pbp_plain):
+            os.remove(pbp_plain)
+        pbp_path = pbp_gz
+    else:
+        write_csv(pbp_plain, PBP_COLS, pbp_rows)
+        if os.path.exists(pbp_gz):
+            os.remove(pbp_gz)
+        pbp_path = pbp_plain
 
     # data/index.csv：累積所有日期，依 gameId 去重
     idx_path = os.path.join(a.out, "index.csv")
@@ -237,13 +302,18 @@ def main():
     def kb(p):
         return f"{os.path.getsize(p)/1024:.0f} KB" if os.path.exists(p) else "-"
 
-    print(f"\n新抓 {fetched} 場，沿用已存在 {skipped} 場")
+    live_note = f"，其中進行中 {live_n} 場" if live_n else ""
+    print(f"\n新抓 {fetched} 場{live_note}，沿用已存在 {skipped} 場")
     print(f"  {tbl_dir}/box_score.csv        {len(box_rows):>5} 列  {kb(os.path.join(tbl_dir,'box_score.csv'))}")
     print(f"  {tbl_dir}/advanced.csv         {len(adv_rows):>5} 列  {kb(os.path.join(tbl_dir,'advanced.csv'))}")
-    print(f"  {tbl_dir}/play_by_play.csv.gz  {len(pbp_rows):>5} 列  {kb(os.path.join(tbl_dir,'play_by_play.csv.gz'))}")
+    print(f"  {pbp_path}  {len(pbp_rows):>5} 列  {kb(pbp_path)}")
     print(f"  {idx_path}                {len(existing):>5} 場  {kb(idx_path)}")
-    raw_total = sum(os.path.getsize(os.path.join(raw_dir, f)) for f in os.listdir(raw_dir))
-    print(f"  {raw_dir}/  {len(os.listdir(raw_dir))} 個檔  {raw_total/1024:.0f} KB")
+    raw_files = sorted(os.listdir(raw_dir)) if os.path.isdir(raw_dir) else []
+    if raw_files:
+        raw_total = sum(os.path.getsize(os.path.join(raw_dir, f)) for f in raw_files)
+        print(f"  {raw_dir}/  {len(raw_files)} 個檔  {raw_total/1024:.0f} KB")
+    else:
+        print(f"  {raw_dir}/  （還沒有打完的比賽，原始檔等 Final 才寫）")
     return 0
 
 

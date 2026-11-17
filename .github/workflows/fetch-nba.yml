@@ -1,4 +1,6 @@
-# 每天自動抓前一晚所有比賽的 box score + play-by-play，commit 進這個 repo。
+# 每天抓一次，收尾用 —— 那個時間點前一晚所有比賽都已 Final。
+# 比賽進行中的即時抓取是另一支：live-nba.yml（比賽時段每 15 分鐘）。
+# 分工：live-nba 不寫 data/raw/（半場的快照不是真相來源），由這一支補齊。
 #
 # 資料來源是 cdn.nba.com —— 雲端實測可用的那個主機（三次不同 Azure IP 都通）。
 # stats.nba.com 在雲端被丟包，所以進階數據由 scripts/advanced_stats.py 自己算。
@@ -8,6 +10,8 @@
 #   data/tables/<date>/box_score.csv        一名球員一列，網頁可直接看
 #   data/tables/<date>/advanced.csv         自己算的進階數據，網頁可直接看
 #   data/tables/<date>/play_by_play.csv.gz  一個動作一列（含投籃座標）
+#                                           （live-nba 在比賽中會先寫未壓縮的
+#                                            play_by_play.csv，這一支會換成 .gz 並刪掉它）
 #   data/raw/<date>/*.json.gz               原始回應，真相來源
 #
 # ⚠️ 需要 repo 設定 Settings -> Actions -> General -> Workflow permissions
@@ -36,7 +40,7 @@ permissions:
   contents: write          # 要 commit 回 repo
 
 concurrency:
-  group: fetch-nba         # 不要兩個同時跑去推同一個分支
+  group: nba-data          # 跟 live-nba 共用：兩支都推同一個分支，不要同時跑
   cancel-in-progress: false
 
 jobs:
@@ -87,7 +91,7 @@ jobs:
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
+          git add -A data/     # -A：play_by_play.csv 換成 .gz 時那個刪除也要進 commit
           N=$(git diff --cached --name-only | wc -l | tr -d ' ')
           git commit -m "data: NBA box score and play-by-play ($N files)"
           # 推之前先 rebase，避免跟你本機的 push 撞在一起

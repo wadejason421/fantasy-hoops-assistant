@@ -67,8 +67,11 @@ documents under [`doc/`](doc/) (written in Traditional Chinese):
 The earlier Yahoo Fantasy design documents are archived in
 [`archive/doc/`](archive/doc/) — see [archive/doc/README.md](archive/doc/README.md).
 
-Fetched data lands in [`data/`](data/), written daily by
-[`fetch-nba.yml`](.github/workflows/fetch-nba.yml) — see [data/README.md](data/README.md).
+Fetched data lands in [`data/`](data/), written by
+[`live-nba.yml`](.github/workflows/live-nba.yml) every 15 minutes while games are
+being played and by [`fetch-nba.yml`](.github/workflows/fetch-nba.yml) once a day
+to fill in the raw JSON after every game is final — see
+[data/README.md](data/README.md).
 
 ---
 
