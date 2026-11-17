@@ -1,0 +1,7 @@
+{
+  "name": "nba-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CORS proxy for NBA liveData endpoints. No dependencies."
+}

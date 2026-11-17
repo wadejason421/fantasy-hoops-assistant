@@ -33,9 +33,27 @@
 
 ## 一、環境設定
 
-### 為什麼不能用普通的 requests
+### 兩條路：Node 不用任何套件，Python 要 curl_cffi
 
-NBA 的 Akamai 會擋掉非瀏覽器的 TLS 指紋。解法是 `curl_cffi`，它用 Chrome 的指紋發請求：
+NBA 的 Akamai 依傳輸層指紋判別客戶端。實測：
+
+| 客戶端 | `cdn.nba.com` |
+|---|---|
+| **Node 原生 `fetch`** | ✅ **直接可用**，只需 `Referer`，零相依 |
+| 瀏覽器 | ✅ 指紋沒問題，但有 CORS（見 [app-design.md](app-design.md)） |
+| `curl` / Python `requests` | ❌ 403 |
+| Python + `curl_cffi` | ✅ 偽裝成 Chrome |
+
+**新東西用 Node 最省事：**
+
+```js
+const r = await fetch(
+  "https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600244.json",
+  { headers: { Referer: "https://www.nba.com/" } });   // 只要這一個 header
+const game = (await r.json()).game;
+```
+
+**Python 的話**用 `curl_cffi`，它用 Chrome 的指紋發請求：
 
 ```bash
 python3 -m venv .venv

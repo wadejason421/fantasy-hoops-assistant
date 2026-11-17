@@ -647,6 +647,65 @@ SAC Domantas Sabonis    63.7 / 63.7      USG%  13.9 / 13.9
 
 唯一真正失去的是 hustle stats。
 
+## 六之七、重大更正：擋的不只是「指紋」，而且 Node 本來就過得去
+
+**2026-11-17 的發現推翻了第五節與六之四的部分結論。** 先前說「擋的是 TLS 指紋，
+解法是 `curl_cffi`」—— 指紋那半對，但「必須用 `curl_cffi`」是錯的。
+
+### 實測
+
+同一台機器、同一個 URL、同一組 header：
+
+| 客戶端 | 只給 `Referer: https://www.nba.com/` | 給完整 header |
+|---|---|---|
+| `curl` | ❌ 403 | ❌ 403 |
+| Python `urllib` | ❌ 403 | ❌ 403 |
+| **Node 原生 `fetch`（undici）** | ✅ **200** | ✅ 200 |
+
+而且不是 header 的差別 —— 把 Node 送出的每一個 header（`Sec-Fetch-Mode: cors`、
+`Accept-Language: *`、`User-Agent: node` …）一字不差地加到 `curl` 上，**仍然 403**。
+所以差異在傳輸層，不在 header。
+
+正確的模型是：**Akamai 對傳輸層指紋做判別，Chrome、Safari、Node/undici 在可接受的那
+一邊，curl 和 Python 的 OpenSSL 握手在被擋的那一邊。** `curl_cffi` 是一種解法
+（把 curl 偽裝成 Chrome），但不是唯一解法 —— 換一個 runtime 就好。
+
+另外確認：`cdn.nba.com` **只需要 `Referer`**，User-Agent 可以完全不給。
+
+### 在資料中心 IP 上也成立
+
+GitHub Actions（Azure `9.234.23.66`），`node_probe.mjs`，**沒有安裝任何套件**：
+
+```
+PASS  cdn todaysScoreboard   8 場, gameDate=2026-11-16 · 25,383B · 410ms
+PASS  cdn boxscore           OKC 125 @ SAC 103 · 40,524B · 94ms
+PASS  cdn playbyplay         590 actions, 170 筆有座標 · 418,007B · 183ms
+PASS  cdn scheduleLeagueV2   174 個比賽日 · 3,376,069B · 603ms
+FAIL  stats boxscoreadvancedv3   fetch failed（資料中心 IP 仍被丟包）
+```
+
+`stats.nba.com` 的資料中心封鎖不變（六之五的結論仍然成立）。
+
+### 為什麼這件事很重要
+
+因為它解開了即時 app 的死結。先前（app-design 第二節）的結論是
+「瀏覽器被 CORS 擋，要繞只能自架代理，要錢又要維運」。
+
+但現在：**代理不需要原生套件了。** 一個 20 行的 JS 檔，丟到任何免費 serverless
+平台就是即時 CORS 代理。見 `proxy/`。
+
+| 先前以為 | 實際 |
+|---|---|
+| 要 `curl_cffi` → 要能編譯原生套件 → 平台受限 | 純 JS 就夠，任何平台 |
+| 自架代理要錢 | Cloudflare Workers 每天 10 萬次 / Vercel Hobby 都免費 |
+| 官方資料做不到即時 | **做得到，約 10 秒** |
+
+### 這對既有程式的影響
+
+`fetch_games.py` 用 `curl_cffi` 仍然可以跑，不需要改 —— 它能動，而且
+`curl_cffi` 在 `stats.nba.com` 那邊（住宅 IP）還是有用。
+但新寫的東西沒有理由再引入那個相依套件。
+
 ## 七、對這個專案的建議
 
 分成兩種用途：
