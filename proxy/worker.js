@@ -10,10 +10,10 @@
  *    部署後先打根路徑 /__selftest 確認；若回 upstream 403，
  *    改用 Vercel 版本（proxy/api/nba.js，跑真正的 Node，指紋已實測可用）。
  */
-import { proxyPath, corsHeaders, indexPayload } from "./_shared.js";
+import { proxyPath, corsHeaders, indexPayload, tokenOk, unauthorized } from "./_shared.js";
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get("Origin") || "*";
 
@@ -44,6 +44,11 @@ export default {
       }, { headers: corsHeaders(origin) });
     }
 
+    const token = request.headers.get("X-Proxy-Token") || url.searchParams.get("token");
+    if (!tokenOk(env && env.PROXY_TOKEN, token)) {
+      const u = unauthorized(origin);
+      return new Response(u.body, { status: u.status, headers: u.headers });
+    }
     const h = {}; request.headers.forEach((v, k) => (h[k.toLowerCase()] = v));
     const r = await proxyPath(url.pathname, origin, h);
     return new Response(r.body, { status: r.status, headers: r.headers });

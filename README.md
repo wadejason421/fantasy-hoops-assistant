@@ -60,15 +60,21 @@ documents under [`doc/`](doc/) (written in Traditional Chinese):
 
 | Document | Contents |
 |---|---|
+| **[conclusion.md](doc/conclusion.md)** | **Start here** — what works, what to deploy, and the open risks |
+| [app-live-data.md](doc/app-live-data.md) | How an app reaches the live feed: the two walls, measured latency, where to host the relay |
 | [nba-api-usage.md](doc/nba-api-usage.md) | How to call the NBA API: endpoints, fields, formats, limits |
 | [research.md](doc/research.md) | Full investigation log — what was tested, what the blocking was, how it was solved |
 | [app-design.md](doc/app-design.md) | Feasibility and UI design for a live box score / play-by-play app |
+| [app-live-data.md](doc/app-live-data.md) | How an app reaches the live data: the two walls in front of the official feed, the measured latency of every route, where to run the relay and what it costs |
 
 The earlier Yahoo Fantasy design documents are archived in
 [`archive/doc/`](archive/doc/) — see [archive/doc/README.md](archive/doc/README.md).
 
-Fetched data lands in [`data/`](data/), written daily by
-[`fetch-nba.yml`](.github/workflows/fetch-nba.yml) — see [data/README.md](data/README.md).
+Fetched data lands in [`data/`](data/), written by
+[`live-nba.yml`](.github/workflows/live-nba.yml) every 15 minutes while games are
+being played and by [`fetch-nba.yml`](.github/workflows/fetch-nba.yml) once a day
+to fill in the raw JSON after every game is final — see
+[data/README.md](data/README.md).
 
 ---
 

@@ -1,7 +1,13 @@
 # data/
 
-由 [`.github/workflows/fetch-nba.yml`](../.github/workflows/fetch-nba.yml) 每天自動寫入。
-每天 UTC 08:23（台北 16:23）抓前一晚所有已結束的比賽。
+自動寫入，兩支 workflow 分工：
+
+| workflow | 什麼時候跑 | 抓什麼 |
+|---|---|---|
+| [`live-nba.yml`](../.github/workflows/live-nba.yml) | 比賽時段每 15 分鐘（UTC 23:00~07:59）、早場每 30 分鐘（UTC 17:00~22:59） | **進行中**的比賽，數據邊打邊更新 |
+| [`fetch-nba.yml`](../.github/workflows/fetch-nba.yml) | 每天 UTC 08:23（台北 16:23）一次 | 收尾。那時全部 Final，補齊原始 JSON 與壓縮檔 |
+
+沒有比賽在打的那幾輪不會產生 commit。
 
 ## 從哪裡開始看
 
@@ -16,13 +22,40 @@ data/
 ├── tables/<date>/
 │   ├── box_score.csv                   ← 一名球員一列，44 欄，網頁可直接看
 │   ├── advanced.csv                    ← 自己算的進階數據，網頁可直接看
-│   └── play_by_play.csv.gz             ← 一個動作一列，31 欄（含投籃座標）
+│   ├── play_by_play.csv                ← 只在該日還有比賽沒打完時存在（未壓縮）
+│   └── play_by_play.csv.gz             ← 全部打完後才出現，未壓縮的那個會被刪掉
 └── raw/<date>/
     ├── boxscore_<gameId>.json.gz       ← 原始回應，真相來源，不要改
     └── playbyplay_<gameId>.json.gz
 ```
 
 `<date>` 是**美東**比賽日（`YYYY-MM-DD`）。台灣時間的早上對應美東前一天晚上。
+
+## 即時資料
+
+比賽進行中時，`index.csv` 的 `status` 欄就是即時狀態（`Q2 1:00`、`Q3 12:00`），
+`awayScore` / `homeScore` 是當下比分，`box_score.csv` 是當下的個人數據。
+
+```bash
+git pull -q && awk -F, 'NR==1 || $1=="'"$(date -u -d '5 hours ago' +%F)"'"' data/index.csv
+```
+
+三件事要先知道：
+
+1. **延遲大約 15 分鐘，不是秒級。** GitHub 的排程 cron 經常延遲 5~30 分鐘，
+   負載高時還會直接跳過某幾輪。要秒級即時只能從瀏覽器直接打 API，
+   見 [`doc/app-design.md`](../doc/app-design.md)
+2. **進行中的場次不寫 `raw/`。** 那裡是真相來源，半場的快照不是真相。
+   等那場打完，之後任一輪看到 Final 就會補上原始 JSON
+3. **`play_by_play` 在比賽中是未壓縮的 `.csv`**，全部打完後才換成 `.csv.gz`。
+   因為這個檔每輪都重寫，而 git 對純文字能做 delta、對 `.gz` 不能
+   （改一個 byte 就是一顆全新的 blob）。讀的時候兩個都要考慮：
+
+```python
+import glob, pandas as pd
+hit = glob.glob("data/tables/2026-11-16/play_by_play.csv*")
+pbp = pd.read_csv(hit[0])      # pandas 看副檔名自動解壓
+```
 
 ## 每天的量
 
@@ -94,3 +127,7 @@ with gzip.open("data/raw/2026-11-15/playbyplay_0022600244.json.gz") as f:
   （`stats.nba.com` 在雲端不可用）。TS% / eFG% 與官方一致。
 - **Hustle stats 沒有** —— 那是獨立的人工記錄，推導不出來。
 - 重跑同一天不會重複抓：已存在的 `raw/` 檔會直接沿用，除非加 `--force`。
+  這只對**已結束**的場次成立 —— 進行中的場次每輪都重抓，因為數字還在變。
+- 即時模式一天會 commit 數十次（`data: NBA live snapshot (...)`）。
+  repo 的 commit 紀錄會被它淹掉；不想要的話把 `live-nba.yml` 的 cron 調疏，
+  或讓它推到另一個分支。

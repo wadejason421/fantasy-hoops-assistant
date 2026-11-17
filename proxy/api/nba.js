@@ -8,7 +8,7 @@
  *
  * 路由：vercel.json 把所有路徑導到這支，原始路徑在 req.url。
  */
-import { proxyPath, corsHeaders, indexPayload } from "../_shared.js";
+import { proxyPath, corsHeaders, indexPayload, tokenOk, unauthorized } from "../_shared.js";
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || "*";
@@ -44,6 +44,13 @@ export default async function handler(req, res) {
     });
   }
 
+  const token = req.headers["x-proxy-token"] ||
+                new URL(req.url, base).searchParams.get("token");
+  if (!tokenOk(process.env.PROXY_TOKEN, token)) {
+    const un = unauthorized(origin);
+    Object.entries(un.headers).forEach(([k, v]) => res.setHeader(k, v));
+    return res.status(401).send(un.body);
+  }
   const r = await proxyPath(path, origin, req.headers);
   Object.entries(r.headers).forEach(([k, v]) => res.setHeader(k, v));
   return r.status === 304 ? res.status(304).end() : res.status(r.status).send(r.body);

@@ -1,0 +1,99 @@
+# 比賽時段每 15 分鐘抓一次，進行中的比賽也抓 —— 數據邊打邊更新。
+#
+# 跟 fetch-nba.yml 的分工：
+#   live-nba.yml   比賽時段高頻跑，給「現在幾分、誰在得分」用。
+#                  進行中的場次不寫 data/raw/（半場的快照不是真相來源）
+#   fetch-nba.yml  每天一次，收尾用。那時所有比賽都已 Final，
+#                  原始 JSON 與 play_by_play.csv.gz 由它補齊
+#
+# 沒有比賽在打的那幾輪，腳本會印「沒有已結束或進行中的比賽」然後正常結束，
+# data/ 沒變化就不 commit，所以不會有空 commit。
+#
+# ⚠️ 兩件要先知道的事：
+#   1. GitHub 的排程 cron 經常延遲 5~30 分鐘，而且負載高時會直接跳過某幾輪。
+#      所以實際更新間隔是「大約 15 分鐘」，不是保證 15 分鐘。
+#      要秒級即時只能從瀏覽器直接打 API（見 doc/app-design.md）
+#   2. 這支一天會 commit 數十次。repo 的 commit 紀錄會被它淹掉
+#
+# ⚠️ 同樣需要 Settings -> Actions -> General -> Workflow permissions
+#    設為「Read and write permissions」。
+
+name: live-nba
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '美東日期 YYYY-MM-DD（留空＝最近一輪比賽）'
+        required: false
+        default: ''
+
+  schedule:
+    # 時間全部是 UTC。cron 沒有時區，所以窗口要同時蓋住冬令與夏令時間：
+    #   冬令 EST = UTC-5：美東 19:00 開打 = UTC 00:00，最晚的西岸場約 02:00 打完 = UTC 07:00
+    #   夏令 EDT = UTC-4：同樣的 19:00 變成 UTC 23:00
+    # 所以主時段取 UTC 23:00~07:59，兩邊都蓋到（冬令時 UTC 23:00 = 美東 18:00，
+    # 本來就有少數場次在那個時間開打）。
+    - cron: '*/15 23 * * *'
+    - cron: '*/15 0-7 * * *'
+    # 早場（週末、假日，美東 12:00 起跑）比較少，每 30 分鐘就夠
+    - cron: '0,30 17-22 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  # 跟 fetch-nba 共用一組：兩支都會 commit 進同一個分支，不要同時推
+  group: nba-data
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 取出 repo
+        uses: actions/checkout@v4
+
+      - name: 裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 裝 curl_cffi
+        run: pip install --quiet --disable-pip-version-check curl_cffi
+
+      - name: 抓資料（含進行中的比賽）
+        run: |
+          python scripts/fetch_games.py --live \
+            ${{ github.event.inputs.date && format('--date {0}', github.event.inputs.date) || '' }} \
+            | tee fetch.log
+
+      - name: 寫進 Actions Summary
+        if: always()
+        run: |
+          {
+            echo '# NBA 即時抓取'
+            echo
+            echo '```'
+            cat fetch.log 2>/dev/null || echo '(沒有輸出)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit 並推回
+        run: |
+          rm -f fetch.log
+          if [ -z "$(git status --porcelain data/)" ]; then
+            echo "data/ 沒有變化，不需要 commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/
+          N=$(git diff --cached --name-only | wc -l | tr -d ' ')
+          git commit -m "data: NBA live snapshot ($N files)"
+          # 推之前先 rebase，避免跟 fetch-nba 或你本機的 push 撞在一起
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "已推回 ${GITHUB_REF_NAME}"

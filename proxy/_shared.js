@@ -29,11 +29,34 @@ function cacheSeconds(path) {
   return 10;                                        // box score / pbp：10 秒
 }
 
+/**
+ * 設了環境變數 PROXY_TOKEN 就要求每個請求帶上它
+ * （header `X-Proxy-Token` 或 query `?token=`）。
+ * 用等長時間比較，不要用 === —— 逐字元比較會從回應時間洩漏 token 內容。
+ * 這個設計取自 scripts/nba_proxy.py。
+ */
+export function tokenOk(expected, got) {
+  if (!expected) return true;              // 沒設就不檢查
+  const a = String(expected), b = String(got || "");
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+export function unauthorized(origin) {
+  return {
+    status: 401,
+    body: JSON.stringify({ error: "unauthorized", detail: "缺少或錯誤的 X-Proxy-Token" }),
+    headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+  };
+}
+
 export function corsHeaders(origin) {
   return {
     "Access-Control-Allow-Origin": origin || "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, If-Modified-Since",
+    "Access-Control-Allow-Headers": "Content-Type, If-Modified-Since, X-Proxy-Token",
     "Access-Control-Max-Age": "86400",
   };
 }
