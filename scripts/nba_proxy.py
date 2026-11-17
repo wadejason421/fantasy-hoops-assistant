@@ -27,6 +27,9 @@ Cloud Run 的容器、或你家裡的機器。**不能是 Cloudflare Workers、V
     curl -s localhost:8080/scoreboard | head -c 300
     curl -s localhost:8080/boxscore/0022600249 | head -c 300
 
+部署到 Cloud Run：見 deploy/cloudrun/README.md。
+聽哪個 port 由環境變數 PORT 決定（Cloud Run 會設它），--port 只是本機用的預設。
+
 端點（都只是把官方的 JSON 原樣轉出來）：
     GET /scoreboard              今日所有比賽與即時比分
     GET /boxscore/<gameId>       單場 box score（33 欄）
@@ -38,9 +41,9 @@ Cloud Run 的容器、或你家裡的機器。**不能是 Cloudflare Workers、V
    任何人都能拿你的主機去打別的網站。要公開部署的話，至少再加一層 token 或限流。
 """
 
-import argparse, json, re, sys, threading, time
+import argparse, hmac, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 try:
     from curl_cffi import requests as cffi
@@ -51,6 +54,12 @@ CDN = "https://cdn.nba.com/static/json"
 H = {"Referer": "https://www.nba.com/", "Origin": "https://www.nba.com",
      "Accept": "application/json, text/plain, */*"}
 GAME_ID = re.compile(r"^\d{10}$")
+
+# 設了 PROXY_TOKEN 就要求每個請求帶上它（header X-Proxy-Token 或 ?token=）。
+# 這擋的是「陌生人拿你的網址當免費 NBA API 用」。注意它擋不掉「請求打進你的容器」——
+# 要在 Google 那層就擋掉得用 IAM（--no-allow-unauthenticated），但那會讓 App 端複雜很多。
+# 真正把費用封頂的是 --max-instances=1，見 deploy/cloudrun/README.md。
+TOKEN = os.environ.get("PROXY_TOKEN", "")
 
 # 路徑白名單：(正則, 轉去哪, 快取秒數)
 # 快取是為了保護 NBA 也保護你 —— App 每 5 秒輪詢時不會每次都真的打出去。
@@ -116,10 +125,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _authorized(self):
+        if not TOKEN:
+            return True
+        got = (self.headers.get("X-Proxy-Token")
+               or parse_qs(urlparse(self.path).query).get("token", [""])[0])
+        # 用 compare_digest，不要用 ==，避免逐字元比較洩漏 token 長度與內容
+        return hmac.compare_digest(got, TOKEN)
+
     def do_GET(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path == "/healthz":
             return self._send(200, b'{"ok":true}', ttl=0)
+        if not self._authorized():
+            return self._send(401, json.dumps(
+                {"error": "unauthorized", "detail": "缺少或錯誤的 X-Proxy-Token"}).encode(), ttl=0)
         if path == "/":
             return self._send(200, json.dumps({
                 "endpoints": ["/scoreboard", "/boxscore/<gameId>",
@@ -138,11 +158,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8080)
+    # Cloud Run 透過 PORT 環境變數告訴你要聽哪個 port，必須照辦。
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)))
     ap.add_argument("--host", default="0.0.0.0")
     a = ap.parse_args()
-    print(f"nba-proxy 聽在 http://{a.host}:{a.port}  （Ctrl-C 停止）")
-    print("  /scoreboard  /boxscore/<gameId>  /playbyplay/<gameId>  /schedule  /healthz")
+    print(f"nba-proxy 聽在 http://{a.host}:{a.port}  （Ctrl-C 停止）", flush=True)
+    print("  /scoreboard  /boxscore/<gameId>  /playbyplay/<gameId>  /schedule  /healthz",
+          flush=True)
+    print(f"  token 檢查：{'開啟' if TOKEN else '關閉（沒設 PROXY_TOKEN）'}", flush=True)
     ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()
 
 
