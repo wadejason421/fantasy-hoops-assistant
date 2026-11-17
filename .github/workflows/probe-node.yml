@@ -1,0 +1,33 @@
+# 測：Node 原生 fetch 能不能在資料中心 IP 直接抓 NBA 官方（不用 curl_cffi）。
+#
+# 住宅 IP 已確認可以 —— curl 和 Python 同樣 header 都 403，但 Node 的 undici
+# 只要帶 Referer 就 200。所以擋的是傳輸層指紋，而 Node 的指紋被接受。
+#
+# 這支要回答的是資料中心 IP 上成不成立。成立的話，任何免費的 Node serverless
+# 平台（Cloudflare Workers / Deno Deploy / Vercel / Netlify）都能當即時 CORS 代理，
+# 前端就能每 10 秒拿到官方資料 —— 真正的即時，而且免費。
+
+name: probe-node
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        description: 'NBA game id（已結束的比賽）'
+        required: false
+        default: '0022600244'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 跑探針（不裝任何套件）
+        run: node scripts/node_probe.mjs "${{ github.event.inputs.game_id || '0022600244' }}"
