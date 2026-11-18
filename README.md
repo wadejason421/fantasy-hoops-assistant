@@ -61,11 +61,16 @@ documents under [`doc/`](doc/) (written in Traditional Chinese):
 | Document | Contents |
 |---|---|
 | **[conclusion.md](doc/conclusion.md)** | **Start here** — what works, what to deploy, and the open risks |
+| [architecture.md](doc/architecture.md) | The system as built: components, the relay's API contract, response shapes, deployment steps |
 | [app-live-data.md](doc/app-live-data.md) | How an app reaches the live feed: the two walls, measured latency, where to host the relay |
 | [nba-api-usage.md](doc/nba-api-usage.md) | How to call the NBA API: endpoints, fields, formats, limits |
 | [research.md](doc/research.md) | Full investigation log — what was tested, what the blocking was, how it was solved |
 | [app-design.md](doc/app-design.md) | Feasibility and UI design for a live box score / play-by-play app |
-| [app-live-data.md](doc/app-live-data.md) | How an app reaches the live data: the two walls in front of the official feed, the measured latency of every route, where to run the relay and what it costs |
+
+The front end is [`web/index.html`](web/index.html): one file, no dependencies, no
+build step. It reads from a relay you deploy ([`proxy/`](proxy/)), since a browser
+cannot reach `cdn.nba.com` directly. Open it, fill in the relay URL, and it shows
+live scores, box scores and play-by-play.
 
 The earlier Yahoo Fantasy design documents are archived in
 [`archive/doc/`](archive/doc/) — see [archive/doc/README.md](archive/doc/README.md).

@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBA 即時數據</title>
+<!--
+  即時看 box score 與 play-by-play。單一檔案、零相依，丟 GitHub Pages 就能用。
+
+  它不直接打 cdn.nba.com —— 瀏覽器會被 CORS 擋（實測只有 Origin: https://www.nba.com
+  拿得到許可）。所以它打你自己的中繼站，中繼站在伺服器端抓再轉給它。
+  中繼站：proxy/（Node 版，推薦）或 scripts/nba_proxy.py（Python 版）。
+  兩者都接受這裡用的原樣路徑。設定存在 localStorage。
+
+  延遲：中繼站快取 10 秒 + 官方 feed 本身落後 8~20 秒 = 跟 NBA 官方 App 同級。
+-->
+<style>
+  :root {
+    --bg: #ffffff; --surface: #f6f7f9; --surface-2: #eceef1;
+    --text: #16181c; --muted: #646a73; --line: #d9dde2;
+    --accent: #1d4ed8; --live: #d92d20; --final: #646a73;
+    --good: #067647; --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101215; --surface: #181b1f; --surface-2: #21252a;
+      --text: #e8eaed; --muted: #9aa1a9; --line: #2c3238;
+      --accent: #6c93f7; --live: #ff6b5e; --final: #9aa1a9; --good: #4ec98a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101215; --surface: #181b1f; --surface-2: #21252a;
+    --text: #e8eaed; --muted: #9aa1a9; --line: #2c3238;
+    --accent: #6c93f7; --live: #ff6b5e; --final: #9aa1a9; --good: #4ec98a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+          "PingFang TC", "Microsoft JhengHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 16px 48px; }
+
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 12px 0 10px;
+  }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .tick {
+    margin-left: auto; font-variant-numeric: tabular-nums; font-size: 12px;
+    color: var(--muted); display: flex; align-items: center; gap: 6px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+  .dot.spin { animation: pulse .6s ease; }
+  @keyframes pulse { 0% { transform: scale(2.2); opacity: .4 } 100% { transform: scale(1); opacity: 1 } }
+  .dot.err { background: var(--live); }
+
+  button, input, select {
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover { background: var(--surface-2); }
+  .ghost { background: none; border-color: transparent; color: var(--muted); padding: 6px; }
+
+  details.cfg { margin-top: 8px; }
+  details.cfg summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .cfg-grid { display: grid; gap: 8px; margin-top: 8px; }
+  .cfg-grid label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  .cfg-grid input { width: 100%; }
+
+  .note {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px 16px; margin: 16px 0;
+  }
+  .note.bad { border-color: var(--live); }
+  .note code {
+    background: var(--surface-2); padding: 1px 5px; border-radius: 4px;
+    font-size: 13px; word-break: break-all;
+  }
+
+  .games { display: grid; gap: 8px; margin: 16px 0; }
+  .game {
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 10px 14px; cursor: pointer; text-align: left;
+    width: 100%;
+  }
+  .game[aria-current="true"] { border-color: var(--accent); }
+  .teams { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .status { font-size: 12px; color: var(--final); white-space: nowrap; }
+  .status.live { color: var(--live); font-weight: 600; }
+
+  .tabs { display: flex; gap: 6px; margin: 18px 0 10px; }
+  .tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 6px 8px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--bg); }
+  thead th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+  tbody tr + tr td { border-top: 1px solid var(--line); }
+  td { font-variant-numeric: tabular-nums; }
+  .tname { margin: 18px 0 6px; font-weight: 650; font-size: 14px; }
+  .tname span { color: var(--muted); font-weight: 400; }
+  .bench td:first-child { color: var(--muted); }
+
+  ol.pbp { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+  ol.pbp li {
+    display: grid; grid-template-columns: 56px 38px 1fr auto; gap: 10px;
+    padding: 7px 4px; border-bottom: 1px solid var(--line); align-items: baseline;
+  }
+  ol.pbp .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  ol.pbp .tri { font-weight: 600; font-size: 12px; }
+  ol.pbp .sc { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  ol.pbp li.fresh { animation: in .8s ease; }
+  @keyframes in { from { background: var(--surface-2); } to { background: transparent; } }
+  .made { color: var(--good); }
+  .miss { color: var(--muted); }
+  .empty { color: var(--muted); padding: 24px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="bar">
+      <h1>NBA 即時數據</h1>
+      <div class="tick">
+        <span class="dot" id="dot"></span>
+        <span id="tick">—</span>
+        <button class="ghost" id="theme" title="切換深淺色">◐</button>
+      </div>
+    </div>
+    <details class="cfg" id="cfg">
+      <summary>設定（中繼站網址）</summary>
+      <div class="cfg-grid">
+        <label>中繼站網址
+          <input id="base" placeholder="https://你的中繼站.vercel.app" autocomplete="off"
+                 spellcheck="false">
+        </label>
+        <label>Token（中繼站沒設 PROXY_TOKEN 就留空）
+          <input id="token" placeholder="（選填）" autocomplete="off" spellcheck="false">
+        </label>
+        <div><button id="save">儲存並重新載入</button></div>
+      </div>
+    </details>
+  </header>
+
+  <div id="msg"></div>
+  <div class="games" id="games"></div>
+  <div id="detail"></div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- 設定 ---------- */
+
+const LS = "nba-live-cfg";
+const cfg = load();
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; }
+}
+function save(next) {
+  try { localStorage.setItem(LS, JSON.stringify(next)); } catch { /* 隱私模式會丟錯 */ }
+}
+
+const POLL_MS = 10000;        // 中繼站快取 10 秒，所以輪詢也用 10 秒
+const BACKOFF_MS = 60000;     // 連續失敗後退避
+const PATH = {
+  scoreboard: "/static/json/liveData/scoreboard/todaysScoreboard_00.json",
+  boxscore: (id) => `/static/json/liveData/boxscore/boxscore_${id}.json`,
+  playbyplay: (id) => `/static/json/liveData/playbyplay/playbyplay_${id}.json`,
+};
+
+/* ---------- 取資料 ---------- */
+
+async function get(path) {
+  const base = (cfg.base || "").replace(/\/+$/, "");
+  if (!base) throw new Error("NO_BASE");
+  const headers = {};
+  if (cfg.token) headers["X-Proxy-Token"] = cfg.token;
+  const r = await fetch(base + path, { headers, cache: "no-store" });
+  if (r.status === 401) throw new Error("UNAUTHORIZED");
+  if (r.status === 403) throw new Error("FORBIDDEN_PATH");
+  if (!r.ok) {
+    // 中繼站把上游狀態放在這個 header，上游 403 通常代表中繼站的 IP 被 NBA 擋了
+    const up = r.headers.get("X-Upstream-Status");
+    throw new Error(up === "403" ? "UPSTREAM_403" : `HTTP_${r.status}`);
+  }
+  return r.json();
+}
+
+/* ---------- 小工具 ---------- */
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** "PT27M21.00S" -> "27:21" */
+function mmss(iso) {
+  const m = /^PT(\d+)M([\d.]+)S$/.exec(iso || "");
+  if (!m) return "";
+  return `${+m[1]}:${String(Math.floor(+m[2])).padStart(2, "0")}`;
+}
+/** 比賽時鐘 "PT05M12.00S" -> "5:12"，秒數小於 1 分鐘時顯示到小數 */
+function clock(iso) {
+  const m = /^PT(\d+)M([\d.]+)S$/.exec(iso || "");
+  if (!m) return "";
+  const mins = +m[1], secs = +m[2];
+  if (mins === 0) return `:${secs.toFixed(1)}`;
+  return `${mins}:${String(Math.floor(secs)).padStart(2, "0")}`;
+}
+/** "PT27M21.00S" -> 27.35（分鐘）。沒上場的是 PT00M00.00S */
+function minutesOf(iso) {
+  const m = /^PT(\d+)M([\d.]+)S$/.exec(iso || "");
+  return m ? +m[1] + +m[2] / 60 : 0;
+}
+const truthy = (v) => v === 1 || v === "1" || v === true;
+const n = (v) => (v === null || v === undefined || v === "" ? 0 : v);
+
+/* ---------- 狀態 ---------- */
+
+let selected = null;       // 目前看的 gameId
+let tab = "box";           // box | pbp
+let seenActions = 0;       // 已經畫出來的 play-by-play 筆數，用來只插新的
+let fails = 0;
+let timer = null, ticker = null, nextAt = 0;
+
+/* ---------- 畫面 ---------- */
+
+function setMsg(html, bad) {
+  $("msg").innerHTML = html ? `<div class="note${bad ? " bad" : ""}">${html}</div>` : "";
+}
+
+function needSetup() {
+  $("cfg").open = true;
+  setMsg(`<strong>先填中繼站網址。</strong><br>
+    瀏覽器不能直接打 <code>cdn.nba.com</code>（CORS 白名單只放行 nba.com 自己），
+    所以要先部署一台中繼站 —— 見 repo 的 <code>proxy/README.md</code>，
+    Vercel 一行指令、免費。部署好把網址填在上面的設定裡。`);
+}
+
+const ERRORS = {
+  UNAUTHORIZED: "中繼站回 401：token 不對或沒帶。檢查上面設定裡的 Token。",
+  FORBIDDEN_PATH: "中繼站回 403：這個路徑不在它的白名單裡。",
+  UPSTREAM_403: `中繼站連得上，但 <strong>cdn.nba.com 回 403</strong> —— 通常是中繼站所在的
+    IP 被 NBA 擋了。換個地方跑（你家電腦的住宅 IP 最安全），程式不用改。`,
+};
+
+function renderGames(sb) {
+  const games = sb.games || [];
+  if (!games.length) {
+    $("games").innerHTML = `<p class="empty">${esc(sb.gameDate || "")} 沒有比賽。</p>`;
+    return;
+  }
+  // 整塊重畫沒問題：這一區很小，而且不會被捲動位置影響
+  $("games").innerHTML = games.map((g) => {
+    const live = g.gameStatus === 2;
+    const st = live
+      ? `Q${g.period} ${clock(g.gameClock) || ""}`.trim()
+      : String(g.gameStatusText || "").trim();
+    return `<button class="game" data-id="${esc(g.gameId)}"
+              aria-current="${g.gameId === selected}">
+        <span class="teams">${esc(g.awayTeam.teamTricode)} ${n(g.awayTeam.score)}
+          &nbsp;@&nbsp; ${esc(g.homeTeam.teamTricode)} ${n(g.homeTeam.score)}</span>
+        <span class="status${live ? " live" : ""}">${esc(st)}</span>
+      </button>`;
+  }).join("");
+
+  for (const el of $("games").querySelectorAll(".game")) {
+    el.onclick = () => {
+      if (selected !== el.dataset.id) { selected = el.dataset.id; seenActions = 0; }
+      renderGames(sb);
+      refresh();
+    };
+  }
+  // 沒選的話自動挑：優先進行中，否則第一場
+  if (!selected) {
+    const liveG = games.find((g) => g.gameStatus === 2);
+    selected = (liveG || games[0]).gameId;
+    seenActions = 0;
+    renderGames(sb);
+  }
+}
+
+const STATS = [
+  ["MIN", (s) => mmss(s.minutes)],
+  ["PTS", (s) => n(s.points)],
+  ["REB", (s) => n(s.reboundsTotal)],
+  ["AST", (s) => n(s.assists)],
+  ["STL", (s) => n(s.steals)],
+  ["BLK", (s) => n(s.blocks)],
+  ["TO",  (s) => n(s.turnovers)],
+  ["FG",  (s) => `${n(s.fieldGoalsMade)}-${n(s.fieldGoalsAttempted)}`],
+  ["3P",  (s) => `${n(s.threePointersMade)}-${n(s.threePointersAttempted)}`],
+  ["FT",  (s) => `${n(s.freeThrowsMade)}-${n(s.freeThrowsAttempted)}`],
+  ["+/-", (s) => (n(s.plusMinusPoints) > 0 ? "+" : "") + n(s.plusMinusPoints)],
+];
+
+function teamTable(t) {
+  // 只留真的上場的人。cdn 的 played 對整張名單都是 "1"，所以要看上場時間。
+  const played = (t.players || []).filter((p) => minutesOf(p.statistics.minutes) > 0);
+  played.sort((a, b) => (truthy(b.starter) - truthy(a.starter))
+    || minutesOf(b.statistics.minutes) - minutesOf(a.statistics.minutes));
+  const rows = played.map((p) => {
+    const s = p.statistics;
+    const cells = STATS.map(([, f]) => `<td>${esc(f(s))}</td>`).join("");
+    return `<tr class="${truthy(p.starter) ? "" : "bench"}">
+        <td>${esc(p.name)}</td>${cells}</tr>`;
+  }).join("");
+  const q = (t.periods || []).map((x) => n(x.score)).join(" / ");
+  return `<div class="tname">${esc(t.teamTricode)} ${n(t.score)}
+            <span>&nbsp;${esc(q)}</span></div>
+    <div class="scroll"><table><thead><tr><th>球員</th>
+      ${STATS.map(([h]) => `<th>${h}</th>`).join("")}
+    </tr></thead><tbody>${rows || `<tr><td colspan="${STATS.length + 1}">還沒有上場紀錄</td></tr>`}
+    </tbody></table></div>
+    <p class="empty" style="font-size:12px;padding:4px 0">先發在上，替補灰字；沒上場的不列。</p>`;
+}
+
+function renderBox(box) {
+  const g = box.game;
+  return `<p class="empty" style="padding:4px 0">${esc(g.gameStatusText || "")}
+      ${g.arena ? "· " + esc(g.arena.arenaName) : ""}</p>
+    ${teamTable(g.awayTeam)}${teamTable(g.homeTeam)}`;
+}
+
+function renderPbp(pbp, container) {
+  const acts = (pbp.game && pbp.game.actions) || [];
+  let ol = container.querySelector("ol.pbp");
+  if (!ol || seenActions === 0) {
+    container.innerHTML = `<ol class="pbp"></ol>`;
+    ol = container.querySelector("ol.pbp");
+    seenActions = 0;
+  }
+  if (acts.length <= seenActions) {
+    if (!acts.length) ol.innerHTML = `<li class="empty">還沒有紀錄</li>`;
+    return;
+  }
+  // 只插新的，而且插在最前面 —— 不整塊重畫，捲動位置才不會跳掉
+  const html = acts.slice(seenActions).map((a) => {
+    let d = esc(a.description || a.actionType || "");
+    if (a.isFieldGoal) {
+      const made = a.shotResult === "Made";
+      d = `<span class="${made ? "made" : "miss"}">${d}</span>` +
+          (a.shotDistance != null ? ` <span class="sc">${Math.round(a.shotDistance)}ft</span>` : "");
+    }
+    return `<li class="fresh">
+        <span class="t">Q${a.period} ${esc(clock(a.clock))}</span>
+        <span class="tri">${esc(a.teamTricode || "")}</span>
+        <span>${d}</span>
+        <span class="sc">${n(a.scoreAway)}-${n(a.scoreHome)}</span>
+      </li>`;
+  }).reverse().join("");
+  ol.insertAdjacentHTML("afterbegin", html);
+  seenActions = acts.length;
+  // 清掉動畫 class，下一輪才看得出哪些是新的
+  setTimeout(() => ol.querySelectorAll("li.fresh").forEach((li) => li.classList.remove("fresh")), 900);
+}
+
+function renderTabs() {
+  return `<div class="tabs">
+      <button data-tab="box" aria-selected="${tab === "box"}">Box Score</button>
+      <button data-tab="pbp" aria-selected="${tab === "pbp"}">逐球紀錄</button>
+    </div><div id="pane"></div>`;
+}
+
+/* ---------- 主迴圈 ---------- */
+
+async function refresh() {
+  if (!cfg.base) { needSetup(); return; }
+  const dot = $("dot");
+  try {
+    const sb = (await get(PATH.scoreboard)).scoreboard;
+    renderGames(sb);
+
+    if (selected) {
+      const d = $("detail");
+      if (!d.querySelector(".tabs")) {
+        d.innerHTML = renderTabs();
+        wireTabs(d);
+      }
+      const pane = $("pane");
+      if (tab === "box") {
+        pane.innerHTML = renderBox(await get(PATH.boxscore(selected)));
+      } else {
+        renderPbp(await get(PATH.playbyplay(selected)), pane);
+      }
+    }
+    setMsg("");
+    fails = 0;
+    dot.classList.remove("err");
+    dot.classList.add("spin");
+    setTimeout(() => dot.classList.remove("spin"), 600);
+    schedule(POLL_MS);
+  } catch (e) {
+    const k = e && e.message;
+    if (k === "NO_BASE") { needSetup(); return; }
+    fails++;
+    dot.classList.add("err");
+    const known = ERRORS[k];
+    if (known) { setMsg(known, true); schedule(BACKOFF_MS); return; }
+    setMsg(fails >= 3
+      ? `連線中斷，重試中（已失敗 ${fails} 次，${BACKOFF_MS / 1000} 秒後再試）<br>
+         <code>${esc(k || "unknown")}</code>`
+      : `抓取失敗，重試中… <code>${esc(k || "unknown")}</code>`, fails >= 3);
+    schedule(fails >= 3 ? BACKOFF_MS : POLL_MS);
+  }
+}
+
+// 每次重畫 tabs 都要把事件掛回去
+function wireTabs(d) {
+  for (const b of d.querySelectorAll(".tabs button")) {
+    b.onclick = () => {
+      tab = b.dataset.tab;
+      if (tab === "pbp") seenActions = 0;   // 換頁要重新插全部
+      d.innerHTML = renderTabs();
+      wireTabs(d);
+      refresh();
+    };
+  }
+}
+
+function schedule(ms) {
+  clearTimeout(timer);
+  nextAt = Date.now() + ms;
+  timer = setTimeout(refresh, ms);
+}
+
+function startTicker() {
+  clearInterval(ticker);
+  ticker = setInterval(() => {
+    if (!nextAt) return;
+    const left = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+    $("tick").textContent = `⟳ ${left}s`;
+  }, 250);
+}
+
+/* ---------- 啟動 ---------- */
+
+$("base").value = cfg.base || "";
+$("token").value = cfg.token || "";
+$("save").onclick = () => {
+  const next = { base: $("base").value.trim(), token: $("token").value.trim() };
+  save(next);
+  location.reload();
+};
+$("theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("nba-live-theme", next); } catch {}
+};
+try {
+  const t = localStorage.getItem("nba-live-theme");
+  if (t) document.documentElement.setAttribute("data-theme", t);
+} catch {}
+
+// 切回前景就立刻更新一次，不要等倒數
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
+
+startTicker();
+refresh();
+</script>
+</body>
+</html>

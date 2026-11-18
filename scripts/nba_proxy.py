@@ -30,12 +30,16 @@ Cloud Run 的容器、或你家裡的機器。**不能是 Cloudflare Workers、V
 部署到 Cloud Run：見 deploy/cloudrun/README.md。
 聽哪個 port 由環境變數 PORT 決定（Cloud Run 會設它），--port 只是本機用的預設。
 
-端點（都只是把官方的 JSON 原樣轉出來）：
-    GET /scoreboard              今日所有比賽與即時比分
-    GET /boxscore/<gameId>       單場 box score（33 欄）
-    GET /playbyplay/<gameId>     單場逐球紀錄（含投籃座標）
-    GET /schedule                整季賽程（檔案大，快取久一點）
+端點（都只是把官方的 JSON 原樣轉出來）。兩種路徑都通，內容相同：
+
+    簡短版                       原樣版（跟 proxy/ 的 Node 版同一組）
+    GET /scoreboard              /static/json/liveData/scoreboard/todaysScoreboard_00.json
+    GET /boxscore/<gameId>       /static/json/liveData/boxscore/boxscore_<gameId>.json
+    GET /playbyplay/<gameId>     /static/json/liveData/playbyplay/playbyplay_<gameId>.json
+    GET /schedule                /static/json/staticData/scheduleLeagueV2_32.json
     GET /healthz                 存活檢查
+
+web/index.html 用原樣版，所以它指到哪一個中繼站都能跑。
 
 ⚠️ 這支刻意**只允許上面那幾條路徑**，不是通用轉發器 —— 不然它會變成一台開放代理，
    任何人都能拿你的主機去打別的網站。要公開部署的話，至少再加一層 token 或限流。
@@ -71,6 +75,17 @@ ROUTES = [
     (re.compile(r"^/playbyplay/(\d{10})$"),
      lambda m: f"{CDN}/liveData/playbyplay/playbyplay_{m.group(1)}.json", 5),
     (re.compile(r"^/schedule$"),
+     lambda m: f"{CDN}/staticData/scheduleLeagueV2_32.json", 3600),
+
+    # 原樣路徑：跟 proxy/ 的 Node 版同一組 API，這樣前端換中繼站不用改程式。
+    # 見 proxy/_shared.js 的 ALLOW。
+    (re.compile(r"^/static/json/liveData/scoreboard/todaysScoreboard_00\.json$"),
+     lambda m: f"{CDN}/liveData/scoreboard/todaysScoreboard_00.json", 10),
+    (re.compile(r"^/static/json/liveData/boxscore/boxscore_(\d{10})\.json$"),
+     lambda m: f"{CDN}/liveData/boxscore/boxscore_{m.group(1)}.json", 10),
+    (re.compile(r"^/static/json/liveData/playbyplay/playbyplay_(\d{10})\.json$"),
+     lambda m: f"{CDN}/liveData/playbyplay/playbyplay_{m.group(1)}.json", 10),
+    (re.compile(r"^/static/json/staticData/scheduleLeagueV2_32\.json$"),
      lambda m: f"{CDN}/staticData/scheduleLeagueV2_32.json", 3600),
 ]
 
@@ -122,18 +137,23 @@ def fetch(url, ttl):
 class Handler(BaseHTTPRequestHandler):
     server_version = "nba-proxy"
 
-    def _send(self, status, body, ctype="application/json", ttl=5, last_modified=None):
+    def _send(self, status, body, ctype="application/json", ttl=5, last_modified=None,
+              upstream_status=None):
         self.send_response(status)
         if status != 304:
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
         # 這兩行就是拆掉 CORS 那道牆的地方
         self.send_header("Access-Control-Allow-Origin", "*")
+        # CORS 預設只讓前端讀幾個 header；這兩個要讀就得明確 expose。
+        # 跟 proxy/_shared.js 保持一致。
+        self.send_header("Access-Control-Expose-Headers", "Last-Modified, X-Upstream-Status")
         self.send_header("Cache-Control", f"public, max-age={ttl}")
         if last_modified:
             self.send_header("Last-Modified", last_modified)
-            # CORS 預設只讓前端讀幾個 header，要讀 Last-Modified 必須明確 expose
-            self.send_header("Access-Control-Expose-Headers", "Last-Modified")
+        if upstream_status is not None:
+            # 前端用它分辨「中繼站掛了」與「中繼站好的，但 cdn.nba.com 擋了這個 IP」
+            self.send_header("X-Upstream-Status", str(upstream_status))
         self.end_headers()
         if status != 304 and self.command != "HEAD":
             self.wfile.write(body)
@@ -142,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")  # 含 If-Modified-Since
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, If-Modified-Since, X-Proxy-Token")  # 含 If-Modified-Since
         self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
@@ -166,8 +187,16 @@ class Handler(BaseHTTPRequestHandler):
                 {"error": "unauthorized", "detail": "缺少或錯誤的 X-Proxy-Token"}).encode(), ttl=0)
         if path == "/":
             return self._send(200, json.dumps({
+                "ok": True,
+                "what": "NBA liveData CORS proxy (Python)",
                 "endpoints": ["/scoreboard", "/boxscore/<gameId>",
-                              "/playbyplay/<gameId>", "/schedule", "/healthz"]}).encode(), ttl=60)
+                              "/playbyplay/<gameId>", "/schedule", "/healthz"],
+                "passthrough": [
+                    "/static/json/liveData/scoreboard/todaysScoreboard_00.json",
+                    "/static/json/liveData/boxscore/boxscore_<10位gameId>.json",
+                    "/static/json/liveData/playbyplay/playbyplay_<10位gameId>.json",
+                    "/static/json/staticData/scheduleLeagueV2_32.json"],
+            }, ensure_ascii=False).encode(), ttl=60)
         for pat, build, ttl in ROUTES:
             m = pat.match(path)
             if m:
@@ -177,8 +206,10 @@ class Handler(BaseHTTPRequestHandler):
                 # 從約 200 MB 降到只有真正變動時才傳。
                 if (status == 200 and lm
                         and self.headers.get("If-Modified-Since") == lm):
-                    return self._send(304, b"", ttl=ttl, last_modified=lm)
-                return self._send(status, body, ttl=ttl, last_modified=lm)
+                    return self._send(304, b"", ttl=ttl, last_modified=lm,
+                                      upstream_status=200)
+                return self._send(status, body, ttl=ttl, last_modified=lm,
+                                  upstream_status=status)
         self._send(404, json.dumps(
             {"error": "not_allowed", "detail": "只開放 / 列出的那幾條路徑"}).encode(), ttl=0)
 
